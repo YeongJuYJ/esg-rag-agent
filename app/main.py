@@ -239,7 +239,8 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
         score = doc.metadata.get("score")
         title = doc.metadata.get("title") or doc.metadata.get("source_file_name")
         logging.debug(f"[RERANK] Rank {idx}: title={title}, score={score:.4f}")
-    
+
+    # reranker logs
     # reranked_docs = compressor.compress_documents(
     #     documents=retrieved_docs, 
     #     query=user_question
