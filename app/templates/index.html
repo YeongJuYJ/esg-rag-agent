@@ -1,0 +1,1588 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ESG RAG Chat</title>
+    <style>
+        html, body {
+          height:100%; margin:0; padding:0;
+        }
+        body {
+          background:#f1f4f9;
+          font-family:'Pretendard',Arial,sans-serif;
+          width:100vw; height:100vh;
+        }
+        * { box-sizing: border-box; }
+
+        /* ------- Topbar ------- */
+        .topbar {
+          display: flex; justify-content: space-between; align-items: center;
+          height: 56px; background: #f1f4f9; position: fixed; top: 0; left: 0; right: 0;
+          z-index: 100; padding: 0 20px;
+        }
+        .topbar-title { font-size: 26px; font-weight: 500; color: #24292f; letter-spacing: -0.5px; height: 56px; display: flex; align-items: center;}
+        .topbar-actions {display: flex; align-items: center; gap: 14px;}
+        .user-profile {display: flex; align-items: center; background: #f6f7fb; border-radius: 24px; padding: 5px 16px 5px 7px; gap: 7px; font-size: 15px; color: #314376; font-weight: 500;}
+        .user-avatar {background: #aeb9fa; color: #3252cb; font-weight: 700; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 15px; box-shadow: 0 1px 5px #aeb9fa33;}
+        .user-email {font-size: 15px; color: #314376; font-weight: 500;}
+        .logout-btn {display: flex; align-items: center; gap: 6px; background: #eef2fa; color: #3267e3; border: none; border-radius: 24px; padding: 8px 20px 8px 13px; font-size: 15px; font-weight: 600; cursor: pointer; box-shadow: none; transition: background 0.15s, color 0.13s; outline: none;}
+        .logout-btn .logout-icon {margin-right: 1px;}
+        .logout-btn:hover, .logout-btn:focus {background: #dfe7fb; color: #1a3ed6;}
+        .logout-btn:active {background: #c8d5f6; color: #3267e3;}
+
+        /* ------- Layout ------- */
+        .container-3col {
+          display: flex; flex-direction: row; position: fixed; top: 56px; left: 0; width: 100vw; height: calc(100vh - 56px);
+          box-sizing: border-box; gap: 18px; justify-content: stretch; align-items: stretch; background: none; padding: 5px 16px 24px 16px;
+        }
+        .panel {background: #fff; border-radius: 16px; box-shadow: 0 2px 18px 0 #e4eaf2; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; margin: 0; padding: 0;}
+        .panel.left   {width: 25%; min-width: 260px;}
+        .panel.center {flex: 1 1 0%; min-width: 400px;}
+        .panel.right  {width: 25%; min-width: 220px;}
+
+        /* ------- Left panel: Tabs, Header ------- */
+        .panel-header {
+          display: flex; align-items: center; height: 62px;
+          padding: 0 28px 0 24px;
+          background: #fff;
+          border-bottom: 1px solid #e9ebee;
+          position: relative;
+        }
+        .panel-title {
+          font-size: 19px;
+          font-weight: 500;
+          color: #1a232b;
+        }
+        .tab-row {display: flex; gap: 4px; padding: 22px 24px 8px 24px; background: #fff;}
+        .tab-btn {flex: 1; padding: 8px 0; font-size: 15px; background: #f5f6fa; border: none; border-radius: 8px 8px 0 0; cursor: pointer; color: #222; font-weight: 500; transition: background .15s;}
+        .tab-btn.active {background: #fff; border-bottom: 2px solid #1976d2; color: #1976d2;}
+        .list-area {padding: 0 24px 18px 24px; flex: 1 1 0; overflow-y: auto; min-height:0;}
+        .session-list {display: flex; flex-direction: column; gap: 6px; padding-top: 6px;}
+        .chat-session-item {display: flex; align-items: center; gap: 14px; padding: 11px 10px 11px 12px; border-radius: 12px; background: transparent; cursor: pointer; transition: background 0.13s, box-shadow 0.13s; position: relative; min-height: 54px; user-select: none;}
+        .chat-session-item:hover, .chat-session-item.active {background: #f2f6ff; box-shadow: 0 2px 9px 0 #c8d5f622;}
+        .chat-session-avatar {width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #aac8fd 60%, #eef3fb 100%); display: flex; align-items: center; justify-content: center; flex-shrink: 0;}
+        .chat-session-avatar svg {width: 27px; height: 27px;}
+        .chat-session-meta {flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px;}
+        .chat-session-title {font-size: 15px; font-weight: 600; color: #26375a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.18; margin-bottom: 1px;}
+        .chat-session-date {font-size: 12px; color: #9cabca; line-height: 1.1; letter-spacing: 0.1px;}
+        .chat-session-item.active .chat-session-title {color: #3873fa;}
+        .chat-session-action {width: 24px; min-width: 24px; display: flex; align-items: center; justify-content: flex-end;}
+        .file-list {display: flex; flex-direction: column; gap: 8px;}
+        .file-source-item {display: flex; align-items: center; padding: 8px 8px 8px 4px; border-radius: 11px; transition: background 0.13s; cursor: pointer;}
+        .file-source-item:hover {background: #eaf2fd;}
+        .file-source-icon {margin-right: 13px; flex-shrink: 0;}
+        .file-source-meta {display: flex; flex-direction: column; min-width: 0; flex: 1 1 0;}
+        .file-source-title {font-size: 15px; color: #18356c; font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;}
+        .file-source-date {font-size: 13px; color: #81a3e3; margin-top: 2px; display: flex; align-items: center; gap: 7px;}
+        .file-source-link {margin-left: 7px; font-size: 13px; color: #4171ea; text-decoration: underline; font-weight: 500; transition: color 0.13s;}
+        .file-source-link:hover {color: #294ba7;}
+
+        /* ------- Center Panel Chat ------- */
+        .main-header {display: flex; justify-content: space-between; align-items: center; height: 62px; border-bottom: 1px solid #e9ebee; background: #fff; padding: 0 38px 0 34px;}
+        .main-header .title {font-size: 19px; font-weight: 500; color: #1a232b;}
+        .main-header .actions {display: flex;}
+        .refresh-btn {display: flex; align-items: center; gap: 7px; padding: 7px 22px 7px 18px; border: 1.5px solid #ddd; border-radius: 50px; background: #fff; color: #222; font-size: 18px; font-weight: 500; cursor: pointer; box-shadow: none; transition: border-color 0.16s, background 0.15s;}
+        .refresh-btn:hover {background: #f5f8ff; border-color: #a8b5db;}
+        .refresh-icon {display: inline-block; vertical-align: middle;}
+        .chat-container {flex: 1 1 0; padding: 32px 38px 18px 38px; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 22px;}
+        .chat-message {display: flex; flex-direction: row; width: 100%;}
+        .chat-message.user {justify-content: flex-end;}
+        .chat-message.ai {justify-content: flex-start;}
+        .bubble {
+          background: #fff;
+          color: #24292f;
+          border-radius: 16px;
+          margin-right: 40px;
+          border: none !important;
+          max-width: 72%;
+          word-break: break-word;
+          font-size: 16px;
+          line-height: 1.8;
+          box-shadow: 0 2px 8px 0 #e9eaf0;
+          padding: 15px 18px 8px 18px;
+          display: flex;
+          flex-direction: column;
+          gap: 0;
+          position: relative;
+        }
+        .bubble-text { width:100%;}
+        .bubble-text p { margin: 0 !important;}
+        .bubble-action { display:flex; justify-content:flex-end; margin-top:7px; }
+        .copy-btn {
+          background: none;
+          border: none;
+          border-radius: 7px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 28px;
+          width: 28px;
+          transition: background .12s, opacity .15s;
+        }
+        .copy-btn svg {
+          width: 18px;
+          height: 18px;
+          fill: #b1b1b7;
+          display: block;
+        }
+        .copy-btn:hover {background: #f3f3fa; color: #4d63d6; opacity: 1;}
+        .copy-btn:hover svg {fill: #4d63d6;}
+        .chat-message.user .bubble {background: #f3f4f6; color: #222; border-bottom-right-radius: 6px; border-top-right-radius: 16px; border-top-left-radius: 16px; border-bottom-left-radius: 16px; margin-left: 40px;}
+        .chat-message.ai .bubble {background: #fff; color: #24292f; border-bottom-left-radius: 6px; border-top-right-radius: 16px; border-top-left-radius: 16px; border-bottom-right-radius: 16px; margin-right: 40px; border: none !important;}
+
+        /* 웰컴 박스 및 애니메이션 */
+        .welcome-box {display: flex; flex-direction: column; align-items: center; justify-content: center; margin-top: 80px; color: #21242a; padding: 48px 32px 48px 32px; border-radius: 18px; background: #fff; box-shadow: 0 2px 18px 0 #e4eaf2;}
+        .welcome-icon {font-size: 42px; margin-bottom: 24px;}
+        .welcome-title {font-size: 26px; font-weight: 600; margin-bottom: 14px; text-align: center;}
+        .welcome-desc {font-size: 17px; color: #222; line-height: 1.8; text-align: center;}
+        .welcome-guide {display: block; margin-top: 18px; color: #5971e5; font-size: 16px;}
+        @keyframes welcomeOutUp {
+          0% {opacity: 1; transform: translateY(0) scale(1);}
+          100% {opacity: 0; transform: translateY(-200px) scale(0.92);}
+        }
+        .welcome-box.animate-out {animation: welcomeOutUp 0.13s cubic-bezier(.36,1.8,.44,1) forwards; will-change: transform, opacity;}
+        .bubble.loading-bubble {background: #fff; color: #222; display: flex; align-items: center; min-height: 32px; gap: 4px; box-shadow: 0 2px 8px 0 #e9eaf0; border: none; flex-direction: row !important; justify-content: flex-start;}
+        .dot {width: 9px; height: 9px; border-radius: 50%; background: #c8cfe6; display: inline-block; animation: dot-bounce 1.2s infinite both;}
+        .dot1 {animation-delay: 0s;}
+        .dot2 {animation-delay: .18s;}
+        .dot3 {animation-delay: .36s;}
+        @keyframes dot-bounce {0%, 80%, 100% {transform: scale(1);} 40% {transform: scale(1.5); background: #8ea2e7;}}
+        .toast {position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #222; color: #fff; font-size: 13px; padding: 5px 16px; border-radius: 6px; box-shadow: 0 3px 8px #20253413; opacity: 0; pointer-events: none; z-index: 99999; transition: opacity 0.18s;}
+        .toast.show {opacity: 1;}
+
+        /* --------- Markdown/Reference --------- */
+        .bubble-text h1, .bubble-text h2, .bubble-text h3 {margin: 20px 0 10px 0; font-weight: bold; line-height: 1.3;}
+        .bubble-text h1 { font-size: 1.6em; }
+        .bubble-text h2 { font-size: 1.35em; }
+        .bubble-text h3 { font-size: 1.16em; }
+        .bubble-text ul, .bubble-text ol {margin: 14px 0 14px 26px; padding-left: 18px;}
+        .bubble-text li {margin: 7px 0; line-height: 1.7;}
+        .bubble-text blockquote {color: #444; border-left: 5px solid #b5b5b5; margin: 16px 0; padding-left: 18px; background: #f9f9f9; font-style: italic;}
+        .bubble-text table {border-collapse: collapse; margin: 18px 0; width: 100%; font-size: 14px; background: #fff;}
+        .bubble-text th, .bubble-text td {border: 1px solid #ddd; padding: 7px 12px; text-align: left;}
+        .bubble-text th {background: #f7f7f7; font-weight: bold;}
+        .bubble-text strong, .bubble-text b {font-weight: bold; color: #224174;}
+        /* .bubble-text code, .bubble-text pre {background: #f4f4f4; border-radius: 4px; font-size: 13px; padding: 2px 5px; color: #1a2131;} */
+        .bubble-text pre {padding: 12px; margin: 16px 0; overflow-x: auto;}
+        .bubble-text {word-break: break-word; line-height: 1.7; margin-bottom: 8px;}
+        .reference-link {cursor: pointer; color: #224174; margin-left: 3px; text-decoration: none; font-size: 1em; position: relative; vertical-align: text-bottom;}
+        .reference-link:hover::after {content: attr(data-tooltip); position: absolute; left: 0; top: 22px; z-index: 100; background: #2c3440; color: #fff; border-radius: 6px; padding: 7px 14px; font-size: 13px; white-space: normal; word-break: break-all; min-width: 160px; max-width: 320px; width: 220px; box-shadow: 0 2px 12px rgba(0,0,0,0.2); opacity: 1; pointer-events: none;}
+        ::-webkit-scrollbar{width:8px;}
+        ::-webkit-scrollbar-thumb{background:#f1f2f7;border-radius:8px;}
+
+        /* --------- Right Studio Panel --------- */
+        .studio-header.studio-title {font-size: 19px; font-weight: 700; color: #313957; display: flex; align-items: center; height: 62px; padding: 0 34px; border-bottom: 1px solid #e9ebee; background: #fff; position: relative;}
+        .studio-section {padding: 20px 24px 8px 24px; display: flex; flex-direction: column; gap: 12px;}
+        .studio-subtitle {font-size: 15px; color: #656f8c; font-weight: 500; margin-bottom: 5px;}
+        .studio-btn {background: #3368ff; color: #fff; font-size: 15px; font-weight: 600; border: none; border-radius: 9px; padding: 12px 0; width: 100%; margin-bottom: 3px; cursor: pointer; transition: background .14s; box-shadow: 0 2px 12px #aeb9fa1b;}
+        .studio-btn:hover {background: #1c50d7;}
+        .studio-divider {width: 100%; height: 1.5px; background: #e9ecf4; margin: 12px 0 6px 0;}
+        .studio-notes-list {
+          display: flex;
+          flex-direction: column;
+          gap: 9px;
+          font-size: 16px;
+          color: #223366;
+          padding-right: 4px;
+          overflow-y: auto;
+        }
+        .studio-note-item {
+          display: flex;
+          align-items: flex-start;
+          gap: 11px;
+          padding: 14px 14px 13px 13px;
+          border-radius: 11px;
+          background: transparent;
+          cursor: pointer;
+          transition: background 0.15s, box-shadow 0.15s, transform 0.11s;
+          position: relative;
+          min-height: 46px;
+          user-select: none;
+        }
+
+        .studio-note-item:hover,
+        .studio-note-item:focus {
+          background: #f5f9ff;
+          box-shadow: 0 2px 8px 0 #d7e2f655;
+          /* 선택 느낌을 더 강하게 주고 싶으면 transform도 추가 */
+          transform: translateY(-1px) scale(1.01);
+        }
+
+        .studio-note-icon {
+          color: #fbc02d;
+          font-size: 22px;
+          flex-shrink: 0;
+          margin-top: 2px;
+        }
+        .studio-note-content {
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 3;
+          line-clamp: 3;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          word-break: break-all;
+          font-size: 15.6px;
+          color: #21242a;
+          line-height: 1.47;
+          max-width: 100%;
+          white-space: normal; /* 중요: 줄바꿈 허용 */
+        }
+        .studio-empty {
+          color: #b6b9ca;
+          text-align: center;
+          padding: 35px 0;
+        }
+
+
+        /* ----------- 입력창 ----------- */
+        .input-area {display: flex; align-items: center; padding: 18px 36px; border-top: 1px solid #eee; background-color: #fff; gap: 12px; min-height: 80px;}
+        .input-area textarea {flex: 1; resize: none; overflow: hidden; padding: 14px 16px; border: 1.5px solid #ddd; border-radius: 12px; font-size: 17px; outline: none; height: 48px; min-height: 48px; max-height: 72px; box-sizing: border-box;}
+        .send-btn {
+          background: #1976d2;
+          border: none;
+          border-radius: 10px;
+          width: 52px;
+          height: 52px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 4px 20px #1976d215;
+          cursor: pointer;
+          transition: background 0.14s, box-shadow 0.15s;
+          padding: 0;
+          min-width: 52px;
+          min-height: 52px;
+        }
+        .send-btn svg { display: block; margin: auto; }
+        .send-btn:active, .send-btn:focus { background: #1255a4; }
+        .send-btn:disabled { background: #aaa; cursor: not-allowed; }
+
+        /* ------ Toggle 버튼 ------ */
+        .panel-toggle-btn {
+          z-index: 200;
+          background: #f6f7faee;
+          border: none;
+          border-radius: 0 12px 12px 0;
+          /* box-shadow: 0 2px 10px #b3b7c810; */
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0;
+          transition: left .19s, right .19s, background .16s;
+        }
+        .panel-toggle-btn svg { display: block; }
+        .panel-toggle-btn.left-toggle {
+          margin-left: auto; position: static;
+          width: 38px; height: 38px;
+          background: #FFFFFF;
+          border-radius: 8px;
+          /* box-shadow: 0 2px 8px #d7e2f633; */
+          justify-content: center;
+          align-items: center;
+        }
+        .panel-toggle-btn.left-toggle svg {
+          width: 22px;
+          height: 22px;
+        }
+        .panel-toggle-btn.left-toggle:hover {background: #e4eaf7;}
+        .panel-toggle-btn.right-toggle {
+          position: static; margin-left: auto; width: 38px; height: 62px;
+          background: #FFFFFF;
+          border-radius: 8px;
+          /* box-shadow: 0 2px 8px #d7e2f633; */
+          display: flex !important; justify-content: center; align-items: center;
+          transition: background 0.14s;
+        }
+        .panel-toggle-btn.right-toggle svg {width: 22px; height: 22px;}
+        .panel-toggle-btn.right-toggle:hover {background: #e4eaf7;}
+
+        /* ----------- 패널 접힘/펼침 상태 ----------- */
+        .container-3col.collapsed-left .panel.left {
+          width: 54px !important; min-width: 0 !important; max-width: 72px !important; padding: 0; overflow: visible; border-radius: 16px;
+        }
+        .container-3col.collapsed-left .panel.left > *:not(.panel-header):not(.collapsed-left-icons) {
+          display: none !important;
+        }
+        .container-3col.collapsed-left .panel.left .panel-header {
+          display: flex !important; align-items: center; height: 62px; padding: 0 8px 0 6px; background: #fff; min-width: 0; width: 100%; box-sizing: border-box; border-bottom: 1px solid #e9ebee; border-radius: 16px 16px 0 0;
+        }
+        .container-3col.collapsed-left .panel.left .panel-header .panel-title {display: none !important;}
+        .container-3col.collapsed-left .panel.left .panel-header .panel-toggle-btn.left-toggle {
+          margin-left: auto; position: static; width: 38px; height: 62px; background: #FFFFFF; border-radius: 8px; justify-content: center; align-items: center; display: flex !important;
+        }
+        .container-3col.collapsed-left .panel.left .panel-toggle-btn.left-toggle svg {width: 22px; height: 22px;}
+        .collapsed-left-icons {
+          display: none;
+          flex-direction: column;
+          align-items: center;
+          padding-top: 20px;
+          gap: 18px;
+          width: 100%;
+          background: none;
+          min-height: 0;
+        }
+        .container-3col.collapsed-left .panel.left .collapsed-left-icons {display: flex !important; padding-top: 20px !important; overflow-y: auto;}
+        .collapsed-left-icons .collapsed-icon {
+          width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;
+          border: none; border-radius: 50%; padding: 0; margin: 0; background: none; cursor: pointer; transition: background .13s;
+        }
+        .collapsed-left-icons .collapsed-icon:hover {background: #f1f5ff;}
+        .collapsed-left-icons svg {display: block; width: 40px; height: 40px;}
+        .collapsed-icon {background: none; border: none; padding: 0; margin: 0; cursor: pointer; outline: none; display: flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 11px; transition: background 0.12s;}
+        .collapsed-icon img {width: 28px; height: 28px; display: block;}
+        .collapsed-icon:hover, .collapsed-icon:focus {background: #f3f6ff;}
+
+        .container-3col.collapsed-right .panel.right {
+          width: 54px !important; min-width: 0 !important; max-width: 72px !important; padding: 0; overflow: visible; border-radius: 16px;
+        }
+        .container-3col.collapsed-right .panel.right > *:not(.collapsed-right-icons) {display: none !important;}
+        .container-3col.collapsed-right .panel.right .collapsed-right-icons {
+          display: flex !important; align-items: center; height: 100%; min-height: 100px; flex-direction: column; gap: 20px; overflow-y: auto; padding-top: 20px !important;
+        }
+        .container-3col.collapsed-right .panel.right > *:not(.studio-header):not(.collapsed-right-icons) {display: none !important;}
+        .container-3col.collapsed-right .panel.right .studio-header {display: flex !important; justify-content: flex-end !important; padding: 0 8px 0 8px; border-bottom: 1px solid #e9ebee; border-radius: 16px 16px 0 0;}
+        .container-3col.collapsed-right .panel.right .panel-toggle-btn.right-toggle {margin: 0; background: #FFFFFF;}
+        .container-3col.collapsed-right .panel.right .right-panel-title {display: none !important;}
+        .memo-save-btn {
+          background: #FFFFFF;
+          border: 1.5px solid #f0efef;
+          color: #1b1b1c;
+          border-radius: 24px;
+          padding: 7px 24px 7px 17px;
+          font-size: 17px;
+          font-weight: 600;
+          margin-right: 0;
+          transition: background .14s, border-color .14s;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 9px;
+        }
+        .memo-save-btn:hover {
+          background: #FFFFFF;
+          border-color: #f0efef;
+          color: #1b1b1c;
+        }
+        .studio-note-detail {
+          background: #fff;
+          border-radius: 14px;
+          box-shadow: 0 1px 10px #e7eaf2;
+          margin: 12px 18px;
+          padding: 22px 24px;
+          font-size: 15px;
+          color: #1d283a;
+          position: relative;
+          max-height: 85vh;
+          overflow: auto;
+          display: flex;
+          flex-direction: column;
+        }
+        .studio-note-detail .note-detail-header {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 14px;
+          font-weight: 600;
+          font-size: 18px;
+        }
+        .studio-note-detail .back-btn {
+          background: none;
+          border: none;
+          cursor: pointer;
+          color: #5173d7;
+          font-size: 21px;
+          margin-right: 8px;
+          padding: 2px 8px 2px 0;
+        }
+        .note-detail-body {
+          max-height: 100%;
+        }
+        .note-detail-header {
+          position: relative;
+          min-height: 42px;
+        }
+        .note-delete-btn {
+          position: absolute;
+          right: 18px;
+          background: none;
+          border: none;
+          cursor: pointer;
+          padding: 0;
+          z-index: 10;
+          transition: background 0.13s;
+        }
+        .note-delete-btn:hover {
+          padding: 3px !important;
+          border-radius: 8px !important;
+          background: #e4eaf7 !important;
+        }
+        /* .reference-badge {
+          display: inline-block;
+          background: #f1f6fe;
+          border-radius: 7px;
+          padding: 3px 11px 3px 7px;
+          font-size: 0.8em;
+          font-weight: 600;
+          margin: 0 5px 0 2px;
+          vertical-align: baseline;
+          cursor: pointer;
+          border: 1.2px solid #bcd7fa;
+          transition: background 0.14s, box-shadow 0.14s;
+          position: relative;
+        }
+        .reference-badge:hover, .reference-badge:focus {
+          background: #e2edfc;
+          box-shadow: 0 2px 12px #d6e8f633;
+          color: #234a82;
+        }
+        .reference-badge::after {
+          content: attr(title);
+          display: none;
+          position: absolute;
+          left: 0;
+          top: 120%;
+          z-index: 22;
+          background: #2c3440;
+          color: #fff;
+          border-radius: 7px;
+          padding: 7px 15px;
+          font-size: 13px;
+          min-width: 130px;
+          max-width: 340px;
+          white-space: pre-line;
+          box-shadow: 0 2px 12px #2226;
+        }
+        .reference-badge:hover::after, .reference-badge:focus::after {
+          display: block;
+        } */
+        /* --------- Reference Icon Tooltip --------- */
+        .esg-ref-icon {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          margin: 0 4px;
+          font-size: 14px;
+          line-height: 1;
+          overflow: visible;
+        }
+
+        .esg-ref-icon .esg-ref-popover {
+          position: absolute;
+          top: 100%;
+          left: 50%;
+          transform: translateX(calc(-20% + 8px)) translateY(8px);
+          display: inline-block;
+          white-space: nowrap;
+          width: auto;
+          opacity: 0;
+          visibility: hidden;
+          pointer-events: none;
+          background: #2c3440;
+          color: #fff;
+          border-radius: 6px;
+          padding: 8px 10px;
+          font-size: 13px;
+          z-index: 2000;
+          box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+          transition: opacity 0.15s ease-in-out;
+        }
+
+        .esg-ref-icon:hover .esg-ref-popover,
+        .esg-ref-icon:focus .esg-ref-popover {
+          opacity: 1;
+          visibility: visible;
+        }
+        
+
+        /* .esg-ref-icon {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          margin: 0 4px;
+          font-size: 14px;
+          line-height: 1;
+          overflow: visible;
+        }
+
+        .esg-ref-icon .esg-ref-popover {
+          position: absolute;
+          top: 100%;
+          left: 50%;
+          transform: translateX(calc(-20% + 8px)) translateY(8px);
+          display: inline-block;
+          width: 280px;
+          white-space: normal;
+          overflow-wrap: break-word;
+          word-break: break-word;
+          line-height: 1.4;
+          opacity: 0;
+          visibility: hidden;
+          pointer-events: none;
+          background: #2c3440;
+          color: #fff;
+          border-radius: 6px;
+          padding: 8px 10px;
+          font-size: 13px;
+          z-index: 2000;
+          box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+          transition: opacity 0.15s ease-in-out;
+        }
+
+        .esg-ref-icon:hover .esg-ref-popover,
+        .esg-ref-icon:focus .esg-ref-popover {
+          opacity: 1;
+          visibility: visible;
+        } */
+
+
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-title">ESG RAG Chat</div>
+    <div class="topbar-actions">
+      <div class="user-profile">
+        <span class="user-avatar">{{ user_id[0] | upper }}</span>
+        <span class="user-email">{{ user_id }}</span>
+      </div>
+      <button class="logout-btn" onclick="logout()" title="로그아웃">
+        <svg class="logout-icon" width="19" height="19" viewBox="0 0 20 20" fill="none">
+          <path d="M8 6V4.5A2.5 2.5 0 0 1 10.5 2h3A2.5 2.5 0 0 1 16 4.5v11A2.5 2.5 0 0 1 13.5 18h-3A2.5 2.5 0 0 1 8 15.5V14" stroke="#3267e3" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M12.5 10H4.5M6.5 7L4 10l2.5 3" stroke="#222" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>로그아웃</span>
+      </button>
+    </div>
+  </div>
+  <div class="container-3col">
+    <!-- 좌측 패널 -->
+    <div class="panel left">
+      <div class="panel-header">
+        <span class="panel-title" id="left-panel-title">대화 목록</span>
+        <button class="panel-toggle-btn left-toggle" title="소스 패널 접기/펼치기" onclick="togglePanel('left')">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+            <rect x="5" y="5" width="18" height="18" rx="2.5" stroke="#444" stroke-width="2"/>
+            <rect x="13" y="7" width="2" height="14" rx="1" fill="#FFF" stroke="#444" stroke-width="2"/>
+          </svg>
+        </button>
+      </div>
+      <div class="collapsed-panel-divider"></div>
+      <div class="collapsed-left-icons"></div>
+      <div class="tab-row">
+        <button id="tab-chat" class="tab-btn active" onclick="showTab('chat')">대화 목록</button>
+        <button id="tab-files" class="tab-btn" onclick="showTab('files')">출처</button>
+      </div>
+      <div class="list-area">
+        <div id="chat-list-area" style="display: block;">
+          <div class="session-list">
+            {% if chat_sessions %}
+              {% for session in chat_sessions %}
+              <div class="chat-session-item" data-session_id="{{ session.id }}">
+                <div class="chat-session-avatar">
+                  <svg viewBox="0 0 48 48" width="42" height="42" fill="none">
+                    <defs>
+                      <radialGradient id="bg" cx="60%" cy="30%" r="75%" fx="75%" fy="40%">
+                        <stop offset="0%" stop-color="#98beff"/>
+                        <stop offset="100%" stop-color="#c5dfff"/>
+                      </radialGradient>
+                    </defs>
+                    <ellipse cx="24" cy="22" rx="20" ry="18" fill="url(#bg)" />
+                    <path d="M38 33 Q44 38 33 36 Q38 36 35 33" fill="#c5dfff"/>
+                    <ellipse cx="24" cy="22" rx="15" ry="13" fill="#fff"/>
+                    <circle cx="19" cy="22" r="2" fill="#90aaff"/>
+                    <circle cx="24" cy="22" r="2" fill="#90aaff"/>
+                    <circle cx="29" cy="22" r="2" fill="#90aaff"/>
+                  </svg>
+                </div>
+                <div class="chat-session-meta">
+                  <div class="chat-session-title" title="{{ session.first_question }}">
+                    {{ session.first_question }}
+                  </div>
+                  <div class="chat-session-date">{{ session.created_at.strftime('%Y-%m-%d') }}</div>
+                </div>
+                <div class="chat-session-action"></div>
+              </div>
+              {% endfor %}
+            {% else %}
+              <p id="no-record">기록이 없습니다.</p>
+            {% endif %}
+          </div>
+        </div>
+        <div id="file-list-area" style="display: none;">
+          <div class="file-list">
+            {% if source_files %}
+              {% for file in source_files %}
+                <div class="file-source-item" title="{{ file.title }}">
+                  <div class="file-source-icon">
+                    <svg width="38" height="38" viewBox="0 0 38 38" fill="none">
+                      <ellipse cx="19" cy="19" rx="18" ry="18" fill="#e7f0fd"/>
+                      <path d="M13 11a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2V11z" fill="#3b7bf7"/>
+                      <rect x="15" y="15" width="8" height="2" rx="1" fill="#fff"/>
+                      <rect x="15" y="19" width="8" height="2" rx="1" fill="#fff"/>
+                      <rect x="15" y="23" width="6" height="2" rx="1" fill="#fff"/>
+                    </svg>
+                  </div>
+                  <div class="file-source-meta">
+                    <div class="file-source-title">{{ file.title }}</div>
+                    <div class="file-source-date">
+                      {{ file.created_at.strftime('%Y-%m-%d') }}
+                      <a href="{{ file.source_uri | replace('gs://esg-ocr-bucket/', 'https://storage.googleapis.com/esg-ocr-bucket/') }}" target="_blank" class="file-source-link" title="다운로드">PDF 보기</a>
+                    </div>
+                  </div>
+                </div>
+              {% endfor %}
+            {% else %}
+              <p id="no-files">등록된 파일이 없습니다.</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- 중앙 채팅 패널 -->
+    <div class="panel center">
+      <div class="main-header">
+        <span class="title">채팅</span>
+        <span class="actions">
+          <button class="refresh-btn" onclick="newChat()">
+            <svg class="refresh-icon" width="22" height="22" viewBox="0 0 22 22" fill="none">
+              <path d="M6.6 5.7A6.5 6.5 0 1 1 5 11" stroke="#222" stroke-width="1.7" fill="none" stroke-linecap="round"/>
+              <path d="M5.2 4.5L6.7 5.8L5.3 7.2" stroke="#222" stroke-width="1.7" fill="none" stroke-linecap="round"/>
+            </svg>
+            <span>새 채팅</span>
+          </button>
+        </span>
+      </div>
+      <div class="chat-container" id="chat-container">
+        <div class="welcome-box">
+          <div class="welcome-icon">☁️</div>
+          <div class="welcome-title">경남 제조업 특화 ESG AI Agent</div>
+          <div class="welcome-desc">
+            제공된 출처들은 환경, 사회, 거버넌스(ESG) 요소들이 기업 운영, 투자 결정, 그리고 공급망 투명성에 어떻게 영향을 미치는지에 대한 표준적 관점을 제시합니다.<br><br>
+            궁금한 점이 있으면 언제든 질문해 주세요.<br>
+            <span class="welcome-guide">예시) “한국에서 ESG 정보 공시 의무화는 어떻게 단계적으로 확대될 예정입니까? 적용 대상 기업과 시점을 중심으로 설명해 주십시오”</span>
+          </div>
+        </div>
+      </div>
+      <div class="input-area">
+        <textarea id="chat-input" rows="1" placeholder="입력을 시작하세요..."></textarea>
+        <button id="send-btn" class="send-btn" onclick="sendMessage()" title="전송">
+          <svg viewBox="0 0 54 54" width="30" height="30">
+            <polygon points="15,39 43,27 15,15 15,25 32,27 15,29" fill="white" />
+            <polyline points="17,27 30,27" stroke="#AEB9FA" stroke-width="2.7" fill="none"/>
+          </svg>
+        </button>
+        <div id="loading-spinner" class="spinner" style="display: none;"></div>
+      </div>      
+    </div>
+    <!-- 우측 패널 -->
+    <div class="panel right">
+      <div class="studio-header studio-title">
+        <span class="right-panel-title">스튜디오</span>
+        <button class="panel-toggle-btn right-toggle" title="스튜디오 패널 접기/펼치기" onclick="togglePanel('right')">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+            <rect x="5" y="5" width="18" height="18" rx="2.5" stroke="#444" stroke-width="2"/>
+            <rect x="13" y="7" width="2" height="14" rx="1" fill="#FFF" stroke="#444" stroke-width="2"/>
+          </svg>
+        </button>
+      </div>
+      <div class="collapsed-panel-divider"></div>
+      <div class="collapsed-right-icons" style="display: none;"></div>
+      <div class="studio-section">
+        <div class="studio-subtitle">프롬프트 맞춤 설정</div>
+        <button class="studio-btn" onclick="openPromptModal()">프롬프트 확인</button>
+      </div>
+      <div class="studio-divider"></div>
+      <div class="studio-notes-list">
+        {% if notes and notes|length > 0 %}
+          {% for note in notes %}
+            <div class="studio-note-item">
+              <span class="studio-note-icon">📝</span>
+              <span class="studio-note-content" title="{{ note.content }}">{{ note.content }}</span>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="studio-empty">저장된 노트가 없습니다.</div>
+        {% endif %}
+      </div>
+      <div class="studio-note-detail" style="display:none"></div>
+    </div>
+  </div>
+  <div id="toast" class="toast"></div>
+    <!-- 프롬프트 조회 모달 -->
+  <div id="prompt-modal" style="display:none; position:fixed; left:0; top:0; width:100vw; height:100vh; background:#0009; z-index:99999; justify-content:center; align-items:center;">
+    <div style="background:#fff; border-radius:13px; box-shadow:0 8px 32px #0002; padding:34px 36px 28px 36px; min-width:350px; max-width:97vw; width: 1000px; position:relative;">
+      <div style="font-size:20px; font-weight:700; color:#222; margin-bottom:18px;">기본 프롬프트(읽기 전용)</div>
+      <div style="margin-bottom:12px;">
+        <label style="color:#888; font-weight:600; font-size:14px;">Role</label>
+        <div id="prompt-role-view" style="background:#f6f6fa; border-radius:7px; padding:11px 13px; font-size:15.5px; min-height:42px; margin-bottom:12px;"></div>
+        <!-- <label style="color:#888; font-weight:600; font-size:14px;">Instruction</label>
+        <div id="prompt-instruction-view" style="background:#f6f6fa; border-radius:7px; padding:11px 13px; font-size:15.5px; min-height:42px; margin-bottom:12px;"></div>
+        <label style="color:#888; font-weight:600; font-size:14px;">Few-shot</label>
+        <div id="prompt-examples-view" style="background:#f6f6fa; border-radius:7px; padding:11px 13px; font-size:15.5px; min-height:42px;"></div> -->
+      </div>
+      <button type="button" onclick="closePromptModal()" style="background:#eee; color:#334; font-weight:600; border:none; border-radius:8px; padding:11px 16px; cursor:pointer; margin-top:15px; float:right;">닫기</button>
+      <button onclick="closePromptModal()" style="position:absolute; top:12px; right:14px; font-size:22px; color:#999; background:none; border:none; cursor:pointer;">×</button>
+    </div>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+  window.chatSessions = [
+    {% for session in chat_sessions %}
+      {id: "{{ session.id }}", first_question: {{ session.first_question|tojson }}}{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ];
+  window.sourceFiles = [
+    {% for file in source_files %}
+      {id: "{{ file.id }}", title: {{ file.title|tojson }}}{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ];
+</script>
+<script>
+  window.notesCount = {{ notes|length }};
+</script>
+<script>
+  marked.setOptions({
+    gfm: true,
+    strikethrough: false
+  });
+
+
+  const currentUserId = "{{ user_id }}";
+  let currentSessionId = null;
+
+  function attachHistoryEventListeners() {
+    document.querySelectorAll('.chat-session-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const sessionId = item.dataset.session_id;
+        loadHistory(sessionId);
+        document.querySelectorAll('.chat-session-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+      });
+    });
+  }
+  attachHistoryEventListeners();
+
+  document.getElementById('chat-input').addEventListener('keydown', function(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      sendMessage();
+    }
+  });
+
+  async function newChat() {
+    currentSessionId = null;
+    showWelcome();
+    document.querySelectorAll('.chat-session-item').forEach(i => i.classList.remove('active'));
+    await fetch('/reset_history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: currentUserId })
+    });
+  }
+
+  async function loadHistory(sessionId) {
+    const response = await fetch('/load_history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: currentUserId, session_id: sessionId })
+    });
+    if (response.ok) {
+      const data = await response.json();
+      currentSessionId = data.session_id;
+      const chatContainer = document.getElementById('chat-container');
+      chatContainer.innerHTML = '';
+      if (data.messages.length === 0) {
+        showWelcome();
+      } else {
+        data.messages.forEach((msg) => {
+          appendMessage(msg.role, msg.content);
+        });
+      }
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+  }
+
+  async function sendMessage() {
+    const inputField = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('send-btn');
+    const loadingSpinner = document.getElementById('loading-spinner');
+    const chatContainer = document.getElementById('chat-container');
+    const messageText = inputField.value.trim();
+    if (!messageText) return;
+
+    setInputDisabled(true);
+
+    if (chatContainer.querySelector('.welcome-box')) {
+      removeWelcomeAnimated();
+    }
+
+    appendMessage('user', messageText);
+    inputField.value = '';
+    sendBtn.style.display = 'none';
+    loadingSpinner.style.display = 'block';
+
+    showLoadingBubble();
+
+    const payload = {
+      user_id: currentUserId,
+      session_id: currentSessionId,
+      messages: [{ role: 'user', content: messageText }]
+    };
+    const response = await fetch('/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (response.ok) {
+      const data = await response.json();
+      currentSessionId = data.session_id;
+      replaceLoadingWithAnswer(data.response);
+
+      if (!document.querySelector(`[data-session_id="${data.session_id}"]`)) {
+        const nowDate = new Date();
+        const dateStr = nowDate.toISOString().slice(0, 10);
+        // 동적으로 세션 리스트 생성
+        const sessionHtml = `
+          <div class="chat-session-item" data-session_id="${data.session_id}">
+            <div class="chat-session-avatar">
+              <svg viewBox="0 0 48 48" width="42" height="42" fill="none">
+                <defs>
+                  <radialGradient id="bg" cx="60%" cy="30%" r="75%" fx="75%" fy="40%">
+                    <stop offset="0%" stop-color="#98beff"/>
+                    <stop offset="100%" stop-color="#c5dfff"/>
+                  </radialGradient>
+                </defs>
+                <ellipse cx="24" cy="22" rx="20" ry="18" fill="url(#bg)" />
+                <path d="M38 33 Q44 38 33 36 Q38 36 35 33" fill="#c5dfff"/>
+                <ellipse cx="24" cy="22" rx="15" ry="13" fill="#fff"/>
+                <circle cx="19" cy="22" r="2" fill="#90aaff"/>
+                <circle cx="24" cy="22" r="2" fill="#90aaff"/>
+                <circle cx="29" cy="22" r="2" fill="#90aaff"/>
+              </svg>
+            </div>
+            <div class="chat-session-meta">
+              <div class="chat-session-title" title="${messageText}">
+                ${messageText}
+              </div>
+              <div class="chat-session-date">${dateStr}</div>
+            </div>
+            <div class="chat-session-action"></div>
+          </div>
+        `;
+        const sessionList = document.querySelector('.session-list');
+        sessionList.insertAdjacentHTML('afterbegin', sessionHtml);
+        attachHistoryEventListeners();
+
+        document.getElementById('no-record')?.remove();
+      }
+    } else {
+      replaceLoadingWithAnswer('Error: ' + response.status);
+    }
+
+    loadingSpinner.style.display = 'none';
+    sendBtn.style.display = 'block';
+    setInputDisabled(false);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+  }
+
+  function appendMessage(role, text) {
+    const chatContainer = document.getElementById('chat-container');
+    const messageWrapper = document.createElement('div');
+    messageWrapper.classList.add('chat-message', role === 'user' ? 'user' : 'ai');
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+
+    const bubbleText = document.createElement('div');
+    bubbleText.className = 'bubble-text';
+    bubbleText.innerHTML = marked.parse(convertReferencesToIcons(text));
+    bubble.appendChild(bubbleText);
+
+    if (role !== 'user') {
+      const bubbleAction = document.createElement('div');
+      bubbleAction.className = 'bubble-action';
+
+      // 왼쪽: 메모 저장 버튼
+      const leftWrap = document.createElement('div');
+      leftWrap.style.flex = "1";
+      leftWrap.style.display = "flex";
+      leftWrap.style.justifyContent = "flex-start";
+
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'memo-save-btn';
+      saveBtn.innerHTML = '📌 메모에 저장';
+      saveBtn.onclick = function () {
+        saveNote(text, role);
+      };
+      leftWrap.appendChild(saveBtn);
+
+      // 오른쪽: 복사 버튼
+      const rightWrap = document.createElement('div');
+      rightWrap.style.flex = "1";
+      rightWrap.style.display = "flex";
+      rightWrap.style.justifyContent = "flex-end";
+      rightWrap.appendChild(makeCopyBtn(text));
+
+      // bubble-action은 양 옆에 div 2개
+      bubbleAction.appendChild(leftWrap);
+      bubbleAction.appendChild(rightWrap);
+
+      bubble.appendChild(bubbleAction);
+    }
+
+    messageWrapper.appendChild(bubble);
+    chatContainer.appendChild(messageWrapper);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+  }   
+
+  function makeCopyBtn(text) {
+    const btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.type = 'button';
+    btn.title = '복사';
+    btn.innerHTML = `
+      <svg viewBox="0 0 24 24">
+        <rect x="8" y="4" width="10" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <rect x="4" y="8" width="10" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      </svg>
+    `;
+    btn.onclick = function () {
+      navigator.clipboard.writeText(text).then(() => {
+        showCopiedHint();
+      });
+    };
+    return btn;
+  }
+
+  function showWelcome() {
+    document.getElementById('chat-container').innerHTML = `
+      <div class="welcome-box">
+        <div class="welcome-icon">☁️</div>
+        <div class="welcome-title">경남 제조업 특화 ESG AI Agent</div>
+        <div class="welcome-desc">
+          제공된 출처들은 환경, 사회, 거버넌스(ESG) 요소들이 기업 운영, 투자 결정, 그리고 공급망 투명성에 어떻게 영향을 미치는지에 대한 표준적 관점을 제시합니다.<br><br>
+          궁금한 점이 있으면 언제든 질문해 주세요.<br>
+          <span class="welcome-guide">예시) “분쟁영향 및 고위험 지역(CAHRA) 목록의 역할에 대한 혼란이 발생하는 이유는 무엇인가요?”, "기존 PLD와 비교하여 개정된 PLD는 손해의 정의를 어떻게 정의하나요?", "ESG 보고서의 신뢰성을 높이기 위해 주로 어떤 방법을 활용하나요?"</span>
+        </div>
+      </div>
+    `;
+  }
+
+  function removeWelcomeAnimated() {
+    const box = document.querySelector('.welcome-box');
+    if (box) {
+      box.classList.add('animate-out');
+      box.addEventListener('animationend', () => {
+        if (box.parentNode) box.parentNode.removeChild(box);
+      }, { once: true });
+    }
+  }
+
+  function showLoadingBubble() {
+    const chatContainer = document.getElementById('chat-container');
+    if (chatContainer.querySelector('.loading-bubble')) return;
+    const loadingMsg = document.createElement('div');
+    loadingMsg.className = 'chat-message ai';
+    loadingMsg.innerHTML = `
+      <div class="bubble loading-bubble">
+        <span class="dot dot1"></span>
+        <span class="dot dot2"></span>
+        <span class="dot dot3"></span>
+      </div>`;
+    chatContainer.appendChild(loadingMsg);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+  }
+
+  function replaceLoadingWithAnswer(answerText) {
+    const chatContainer = document.getElementById('chat-container');
+    const loadingMsg = chatContainer.querySelector('.loading-bubble')?.parentElement;
+    if (loadingMsg) {
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'chat-message ai';
+
+      const bubbleDiv = document.createElement('div');
+      bubbleDiv.className = 'bubble';
+
+      const bubbleText = document.createElement('div');
+      bubbleText.className = 'bubble-text';
+      bubbleText.innerHTML = marked.parse(convertReferencesToIcons(answerText));
+      bubbleDiv.appendChild(bubbleText);
+
+      // 메모 + 복사 버튼을 appendMessage와 동일하게!
+      const bubbleAction = document.createElement('div');
+      bubbleAction.className = 'bubble-action';
+
+      // 왼쪽: 메모에 저장
+      const leftWrap = document.createElement('div');
+      leftWrap.style.flex = "1";
+      leftWrap.style.display = "flex";
+      leftWrap.style.justifyContent = "flex-start";
+
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
+      saveBtn.className = 'memo-save-btn';
+      saveBtn.innerHTML = '📌 메모에 저장';
+      saveBtn.onclick = function () {
+        saveNote(answerText, 'ai');
+      };
+      leftWrap.appendChild(saveBtn);
+
+      // 오른쪽: 복사 버튼
+      const rightWrap = document.createElement('div');
+      rightWrap.style.flex = "1";
+      rightWrap.style.display = "flex";
+      rightWrap.style.justifyContent = "flex-end";
+      rightWrap.appendChild(makeCopyBtn(answerText));
+
+      bubbleAction.appendChild(leftWrap);
+      bubbleAction.appendChild(rightWrap);
+
+      bubbleDiv.appendChild(bubbleAction);
+      msgDiv.appendChild(bubbleDiv);
+      loadingMsg.replaceWith(msgDiv);
+    } else {
+      appendMessage('ai', answerText);
+    }
+  }
+
+  // function convertReferencesToIcons(text) {
+  //   // 제목(콤마 포함 가능)과 뒤따르는 페이지 리스트 캡처
+  //   const refRegex = /(?:Source|출처):\s*([\s\S]+?)\s*,\s*(?:page|페이지)=([\d,\s]+)/g;
+
+  //   // 1) 참조 → 복수의 아이콘으로 대체
+  //   let replaced = text.replace(refRegex, (_, title, pages) => {
+  //     const pageList = pages.split(',').map(p => p.trim()).filter(Boolean);
+  //     return pageList
+  //       .map(page => {
+  //         const tooltip = `문서: ${title.trim()} / 페이지: ${page}`;
+  //         return `<span class="esg-ref-icon" tabindex="0" aria-label="${tooltip}">📎<span class="esg-ref-popover">${tooltip}</span></span>`;
+  //       })
+  //       .join(' ');
+  //   });
+
+  //   // 2) 남은 앞 괄호 제거
+  //   replaced = replaced.replace(/\(\s*/g, '');
+  //   // 3) 남은 세미콜론 제거
+  //   replaced = replaced.replace(/;\s*/g, ' ');
+  //   // 4) 남은 닫는 괄호 제거
+  //   replaced = replaced.replace(/\s*\)/g, '');
+
+  //   return replaced;
+  // }
+  
+  // function convertReferencesToIcons(text) {
+  //   let result = "";
+  //   let idx = 0;
+
+  //   while (true) {
+  //     // 1) "(출처:" 위치 찾기
+  //     const start = text.indexOf("(출처:", idx);
+  //     if (start === -1) break;
+  //     result += text.slice(idx, start);
+
+  //     // 2) 짝이 맞는 닫는 괄호 찾기 (내부의 다른 괄호를 건너뛰도록)
+  //     let level = 0, end = -1;
+  //     for (let i = start; i < text.length; i++) {
+  //       if (text[i] === "(") level++;
+  //       else if (text[i] === ")") {
+  //         level--;
+  //         if (level === 0) { end = i; break; }
+  //       }
+  //     }
+  //     if (end === -1) break;  // 닫는 괄호가 없으면 탈출
+
+  //     // 3) 내부 블록 추출 및 "출처:" 접두어 제거
+  //     const block = text
+  //       .slice(start + 1, end)
+  //       .replace(/^(?:Source|출처):\s*/, "");
+
+  //     // 4) 세미콜론으로 문서별 분리
+  //     const docs = block.split(";").map(d => d.trim()).filter(Boolean);
+
+  //     // 5) 각 문서 → 페이지별로 아이콘 생성
+  //     const icons = [];
+  //     docs.forEach(doc => {
+  //       const m = doc.match(/(?:제목=)?\s*([^,]+?)\s*,\s*페이지=([\d,\s]+)/);
+  //       if (!m) return;
+  //       const title = m[1].trim();
+  //       m[2].split(",").map(p => p.trim()).filter(Boolean)
+  //         .forEach(page => {
+  //           const tooltip = `문서: ${title} / 페이지: ${page}`;
+  //           icons.push(
+  //             `<span class="esg-ref-icon" tabindex="0" aria-label="${tooltip}">📎` +
+  //             `<span class="esg-ref-popover">${tooltip}</span>` +
+  //             `</span>`
+  //           );
+  //         });
+  //     });
+
+  //     // 6) 아이콘만 이어 붙이고 인덱스 이동
+  //     result += icons.join(" ");
+  //     idx = end + 1;
+  //   }
+
+  //   // 7) 나머지 텍스트 추가
+  //   result += text.slice(idx);
+  //   return result;
+  // }
+
+  function convertReferencesToIcons(text) {
+    let result = "";
+    let idx = 0;
+
+    while (true) {
+      // 1) "(출처:" 위치 찾기
+      const start = text.indexOf("(출처:", idx);
+      if (start === -1) break;
+      result += text.slice(idx, start);
+
+      // 2) 짝이 맞는 닫는 괄호 찾기 (내부 괄호 무시)
+      let level = 0, end = -1;
+      for (let i = start; i < text.length; i++) {
+        if (text[i] === "(") level++;
+        else if (text[i] === ")") {
+          level--;
+          if (level === 0) { end = i; break; }
+        }
+      }
+      if (end === -1) break;
+
+      // 3) 내부 블록 추출 및 "출처:" 접두어 제거
+      const block = text
+        .slice(start + 1, end)
+        .replace(/^(?:Source|출처):\s*/, "");
+
+      // 4) 세미콜론으로 문서별 분리
+      const docs = block.split(";").map(d => d.trim()).filter(Boolean);
+
+      // 5) 각 문서 → 페이지별로 아이콘 생성
+      const icons = [];
+      docs.forEach(doc => {
+        // 제목과 페이지를 ", 페이지=" 기준으로 분리 (제목 안 콤마 무시)
+        const raw = doc.replace(/^(?:제목=)?\s*/, "");
+        const parts = raw.split(/,\s*페이지=/);
+        if (parts.length < 2) return;
+        const title = parts[0].trim();
+        const pages = parts[1].split(",").map(p => p.trim()).filter(Boolean);
+
+        pages.forEach(page => {
+          const tooltip = `문서: ${title} / 페이지: ${page}`;
+          icons.push(
+            `<span class="esg-ref-icon" tabindex="0" aria-label="${tooltip}">📎` +
+            `<span class="esg-ref-popover">${tooltip}</span>` +
+            `</span>`
+          );
+        });
+      });
+
+      // 6) 아이콘만 이어 붙이고 인덱스 이동
+      result += icons.join(" ");
+      idx = end + 1;
+    }
+
+    // 7) 나머지 텍스트 추가
+    result += text.slice(idx);
+    return result;
+  }
+
+
+  
+  function showCopiedHint(msg) {
+    const toast = document.getElementById('toast');
+    toast.innerText = msg || '클립보드에 복사되었습니다.';
+    toast.classList.add('show');
+    setTimeout(() => {
+      toast.classList.remove('show');
+    }, 900);
+  }
+
+  function setInputDisabled(disabled) {
+    document.getElementById('chat-input').disabled = disabled;
+    document.getElementById('send-btn').disabled = disabled;
+  }
+
+  async function logout() {
+    window.location.href = "/logout";
+  }
+
+  function updatePanelToggleBtn() {
+    const leftBtn = document.querySelector('.panel-toggle-btn.left-toggle');
+    const rightBtn = document.querySelector('.panel-toggle-btn.right-toggle');
+    if (leftBtn) leftBtn.style.top = (document.querySelector('.topbar').offsetHeight || 56) + 'px';
+    if (rightBtn) rightBtn.style.top = (document.querySelector('.topbar').offsetHeight || 56) + 'px';
+  }
+  window.addEventListener('resize', updatePanelToggleBtn);
+  window.addEventListener('DOMContentLoaded', updatePanelToggleBtn);
+
+  // 옵션: 툴팁을 마우스오버로 띄우고 싶다면
+  const leftPanelToggleBtn = document.getElementById('left-panel-toggle-btn');
+  if (leftPanelToggleBtn) {
+    leftPanelToggleBtn.addEventListener('mouseenter', function () {
+      this.setAttribute('data-tooltip', this.title);
+    });
+    leftPanelToggleBtn.addEventListener('mouseleave', function () {
+      this.removeAttribute('data-tooltip');
+    });
+  }
+  // 현재 탭 상태 기억
+  let currentTab = 'chat';
+
+  function renderCollapsedIcons(tab) {
+    const iconsBox = document.querySelector('.collapsed-left-icons');
+    iconsBox.innerHTML = '';
+
+    if (tab === 'chat') {
+      let sessions = window.chatSessions || [];
+      const svgIcon = `
+        <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
+          <circle cx="30" cy="30" r="28" fill="url(#bub)" />
+          <ellipse cx="30" cy="30" rx="19" ry="16" fill="#fff"/>
+          <circle cx="23.5" cy="31.5" r="2.5" fill="#89A9FF"/>
+          <circle cx="30" cy="31.5" r="2.5" fill="#89A9FF"/>
+          <circle cx="36.5" cy="31.5" r="2.5" fill="#89A9FF"/>
+          <defs>
+            <radialGradient id="bub" cx="60%" cy="30%" r="75%" fx="75%" fy="40%">
+              <stop offset="0%" stop-color="#A9C6FF"/>
+              <stop offset="100%" stop-color="#DAE7FF"/>
+            </radialGradient>
+          </defs>
+        </svg>
+      `;
+      for (let i = 0; i < sessions.length; i++) {
+        iconsBox.innerHTML += `<button class="collapsed-icon" tabindex="-1" title="${sessions[i].first_question}">${svgIcon}</button>`;
+      }
+    } else if (tab === 'files') {
+      let files = window.sourceFiles || [];
+      const fileSvg = `
+        <svg width="38" height="38" viewBox="0 0 38 38" fill="none">
+          <ellipse cx="19" cy="19" rx="18" ry="18" fill="#e7f0fd"/>
+          <path d="M13 11a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2V11z" fill="#3b7bf7"/>
+          <rect x="15" y="15" width="8" height="2" rx="1" fill="#fff"/>
+          <rect x="15" y="19" width="8" height="2" rx="1" fill="#fff"/>
+          <rect x="15" y="23" width="6" height="2" rx="1" fill="#fff"/>
+        </svg>
+      `;
+      const MAX_FILES = 30;
+
+      // 30개 이하면 모두 아이콘
+      if (files.length <= MAX_FILES) {
+        for (let i = 0; i < files.length; i++) {
+          iconsBox.innerHTML += `<button class="collapsed-icon" tabindex="-1" title="${files[i].title}">${fileSvg}</button>`;
+        }
+      } else {
+        // 30개 초과면 29개 아이콘 + 마지막은 "+N"
+        for (let i = 0; i < MAX_FILES - 1; i++) {
+          iconsBox.innerHTML += `<button class="collapsed-icon" tabindex="-1" title="${files[i].title}">${fileSvg}</button>`;
+        }
+        const moreCount = files.length - (MAX_FILES - 1);
+        iconsBox.innerHTML += `
+          <button class="collapsed-icon" tabindex="-1" title="외 ${moreCount}개 더 있음" 
+            style="font-weight:700; font-size:17px; background:#e7f0fd; color:#3b7bf7; border-radius:10px; border:1.5px solid #b8ccf7;">
+            +${moreCount}
+          </button>
+        `;
+      }
+    }
+  }
+
+  // function renderCollapsedIcons(tab) {
+  //   const iconsBox = document.querySelector('.collapsed-left-icons');
+  //   iconsBox.innerHTML = '';
+
+  //   if (tab === 'chat') {
+  //     let sessions = window.chatSessions || [];
+  //     const svgIcon = `
+  //       <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
+  //         <circle cx="30" cy="30" r="28" fill="url(#bub)" />
+  //         <ellipse cx="30" cy="30" rx="19" ry="16" fill="#fff"/>
+  //         <circle cx="23.5" cy="31.5" r="2.5" fill="#89A9FF"/>
+  //         <circle cx="30" cy="31.5" r="2.5" fill="#89A9FF"/>
+  //         <circle cx="36.5" cy="31.5" r="2.5" fill="#89A9FF"/>
+  //         <defs>
+  //           <radialGradient id="bub" cx="60%" cy="30%" r="75%" fx="75%" fy="40%">
+  //             <stop offset="0%" stop-color="#A9C6FF"/>
+  //             <stop offset="100%" stop-color="#DAE7FF"/>
+  //           </radialGradient>
+  //         </defs>
+  //       </svg>
+  //     `;
+  //     for (let i = 0; i < sessions.length; i++) {
+  //       iconsBox.innerHTML += `<button class="collapsed-icon" tabindex="-1" title="${sessions[i].first_question}">${svgIcon}</button>`;
+  //     }
+  //   } else if (tab === 'files') {
+  //       let files = window.sourceFiles || [];
+  //       // 요청하신 SVG 아이콘
+  //       const fileSvg = `
+  //         <svg width="38" height="38" viewBox="0 0 38 38" fill="none">
+  //           <ellipse cx="19" cy="19" rx="18" ry="18" fill="#e7f0fd"/>
+  //           <path d="M13 11a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2V11z" fill="#3b7bf7"/>
+  //           <rect x="15" y="15" width="8" height="2" rx="1" fill="#fff"/>
+  //           <rect x="15" y="19" width="8" height="2" rx="1" fill="#fff"/>
+  //           <rect x="15" y="23" width="6" height="2" rx="1" fill="#fff"/>
+  //         </svg>
+  //       `;
+  //       for (let i = 0; i < files.length; i++) {
+  //         iconsBox.innerHTML += `<button class="collapsed-icon" tabindex="-1" title="${files[i].title}">${fileSvg}</button>`;
+  //       }
+  //   }
+  // }
+
+  // 패널이 접혔는지 여부를 반환
+  function isLeftPanelCollapsed() {
+    return document.querySelector('.container-3col').classList.contains('collapsed-left');
+  }
+
+  // 패널 토글 함수 보강
+  function togglePanel(side) {
+    const container = document.querySelector('.container-3col');
+    if (side === 'left') {
+      container.classList.toggle('collapsed-left');
+      document.querySelector('.panel-toggle-btn.left-toggle svg').style.transform =
+        container.classList.contains('collapsed-left') ? 'rotate(0deg)' : 'rotate(180deg)';
+      updateCollapsedIcons();
+    }
+    if (side === 'right') {
+      container.classList.toggle('collapsed-right');
+      document.querySelector('.panel-toggle-btn.right-toggle svg').style.transform =
+        container.classList.contains('collapsed-right') ? 'rotate(180deg)' : 'rotate(0deg)';
+      updateCollapsedRightIcons();
+    }
+  }
+
+  // collapsed 아이콘 표시 업데이트 함수
+  function updateCollapsedIcons() {
+    const iconsBox = document.querySelector('.collapsed-left-icons');
+    if (isLeftPanelCollapsed()) {
+      iconsBox.style.display = 'flex';
+      renderCollapsedIcons(currentTab); // 탭별로 아이콘 렌더링
+    } else {
+      iconsBox.style.display = 'none';
+      iconsBox.innerHTML = ''; // ← 펼칠 때 잔상도 완전 제거
+    }
+  }
+
+  // 탭 전환 함수 보강
+  function showTab(tab) {
+    document.getElementById('chat-list-area').style.display = (tab === 'chat') ? 'block' : 'none';
+    document.getElementById('file-list-area').style.display = (tab === 'files') ? 'block' : 'none';
+    document.getElementById('tab-chat').classList.toggle('active', tab === 'chat');
+    document.getElementById('tab-files').classList.toggle('active', tab === 'files');
+    document.getElementById('left-panel-title').innerText = (tab === 'chat') ? '대화 목록' : '출처';
+    currentTab = tab;
+    updateCollapsedIcons();
+  }
+
+  // 이벤트 연결 (탭 전환시)
+  document.getElementById('tab-chat').addEventListener('click', function() {
+    showTab('chat');
+  });
+  document.getElementById('tab-files').addEventListener('click', function() {
+    showTab('files');
+  });
+
+  // **초기 로딩/새로고침 시에도 상태 보정**
+  document.addEventListener('DOMContentLoaded', function() {
+    updateCollapsedIcons();
+    updateCollapsedRightIcons();
+    refreshNotesPanel();
+  });
+
+  function updateCollapsedRightIcons() {
+    const iconsBox = document.querySelector('.collapsed-right-icons');
+    const collapsed = document.querySelector('.container-3col').classList.contains('collapsed-right');
+    if (collapsed) {
+      iconsBox.style.display = 'flex';
+      renderCollapsedRightIcons();
+    } else {
+      iconsBox.style.display = 'none';
+      iconsBox.innerHTML = '';
+    }
+  }
+
+  function saveNote(content, role) {
+    fetch('/save_note', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: currentUserId,
+        content: content,
+        role: role,
+        session_id: currentSessionId,
+      })
+    })
+    .then(res => res.json())
+    .then(data => {
+      showCopiedHint('노트로 저장되었습니다.');
+      refreshNotesPanel(); 
+    })
+    .catch(() => showCopiedHint('저장 실패!'));
+  }
+
+  function renderNotes(notes) {
+    const notesList = document.querySelector('.studio-notes-list');
+    if (!notesList) return;
+    if (!notes || notes.length === 0) {
+      notesList.innerHTML = `<div class="studio-empty">저장된 노트가 없습니다.</div>`;
+      return;
+    }
+    notesList.innerHTML = notes.map(note => `
+      <div class="studio-note-item" data-note-id="${note.id}" title="${note.content.replace(/"/g, '&quot;')}">
+        <span class="studio-note-icon">📝</span>
+        <span class="studio-note-content">${ellipsis(note.content, 90)}</span>
+      </div>
+    `).join('');
+
+    // 각각 클릭 이벤트 추가
+    document.querySelectorAll('.studio-note-item').forEach(item => {
+      item.onclick = function() {
+        const noteId = this.getAttribute('data-note-id');
+        // notes 배열에서 해당 id의 note 찾기
+        const note = notes.find(n => n.id == noteId);
+        showNoteDetail(note);
+      }
+    });
+  }
+
+  // 긴 텍스트 ... 처리
+  function ellipsis(text, maxLen) {
+    if (text.length <= maxLen) return text;
+    return text.slice(0, maxLen) + '...';
+  }
+
+  function showNoteDetail(note) {
+    const detailBox = document.querySelector('.studio-note-detail');
+    const notesList = document.querySelector('.studio-notes-list');
+    if (!detailBox) return;
+
+    // 맨 앞 줄이 ##, #, ### 등으로 시작하면 제거
+    let content = note.content.replace(/^\s*#{1,3} .*\n?/, "");
+
+    // 제목 추출: 맨 앞 줄(줄바꿈 전까지) or 별도로 저장된 title
+    let firstLine = note.content.split('\n').find(line => line.trim().length > 0);
+    if (firstLine.startsWith('#')) firstLine = firstLine.replace(/^#+\s*/, "");
+
+    // KST 포맷
+    function formatToKST(isoString) {
+      if (!isoString) return '';
+      const utcDate = new Date(isoString);
+      const kstDate = new Date(utcDate.getTime() + 9 * 60 * 60 * 1000);
+      const y = kstDate.getFullYear();
+      const m = String(kstDate.getMonth() + 1).padStart(2, '0');
+      const d = String(kstDate.getDate()).padStart(2, '0');
+      const h = String(kstDate.getHours()).padStart(2, '0');
+      const min = String(kstDate.getMinutes()).padStart(2, '0');
+      return `${y}-${m}-${d} ${h}:${min}`;
+    }
+
+    detailBox.innerHTML = `
+      <div class="note-detail-header">
+        <button class="back-btn" onclick="backToNotesList()" title="돌아가기">&larr;</button>
+        <span style="font-weight: 600;">메모</span>
+        <button 
+          class="note-delete-btn"
+          style="position: absolute; right: 22px; background: none; border: none; cursor: pointer;"
+          onclick="deleteNote('${note.id}')"
+          title="메모 삭제"
+        >
+          <svg width="25" height="25" viewBox="0 0 25 25" fill="none">
+            <rect x="6.5" y="8" width="12" height="11" rx="2" fill="#fff" stroke="#222" stroke-width="2"/>
+            <rect x="8.5" y="5" width="8" height="3" rx="1" fill="#fff" stroke="#222" stroke-width="1.4"/>
+            <rect x="11" y="3.2" width="3" height="2" rx="1" fill="#fff" stroke="#222" stroke-width="1"/>
+            <rect x="10" y="11" width="1.3" height="5.5" rx="0.65" fill="#222"/>
+            <rect x="13.7" y="11" width="1.3" height="5.5" rx="0.65" fill="#222"/>
+          </svg>
+        </button>
+      </div>
+      <div class="note-detail-title" style="font-weight:600; font-size:19px; margin-bottom:16px;">
+        ${ellipsis(firstLine, 60)}
+      </div>
+      <div class="note-detail-body bubble-text" style="margin-bottom:12px; max-height:70vh;">
+        ${marked.parse(content)}
+      </div>
+      <div style="font-size:12px; color:#b5b5b5;">저장일시: ${formatToKST(note.created_at)}</div>
+    `;
+    notesList.style.display = 'none';
+    detailBox.style.display = 'block';
+  }
+
+  // 뒤로가기(목록)로
+  function backToNotesList() {
+    const detailBox = document.querySelector('.studio-note-detail');
+    const notesList = document.querySelector('.studio-notes-list');
+    detailBox.style.display = 'none';
+    notesList.style.display = 'block';
+  }
+
+  async function refreshNotesPanel() {
+    try {
+      const res = await fetch(`/get_notes?user_id=${encodeURIComponent(currentUserId)}`);
+      const data = await res.json();
+      window.notesCount = (data.notes || []).length;
+      document.querySelector('.studio-note-detail').style.display = 'none'; // 리스트로
+      document.querySelector('.studio-notes-list').style.display = 'block';
+      renderNotes(data.notes || []);
+    } catch (e) {
+      renderNotes([]);
+    }
+  }
+
+  function deleteNote(noteId) {
+    if (!confirm('정말 이 메모를 삭제하시겠습니까?')) return;
+    fetch('/delete_note', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note_id: noteId })
+    })
+    .then(res => res.json())
+    .then(data => {
+      if (data.success) {
+        showCopiedHint('메모가 삭제되었습니다.');
+        refreshNotesPanel(); // 삭제 후 목록 새로고침
+      } else {
+        showCopiedHint('삭제에 실패했습니다.');
+      }
+    })
+    .catch(() => showCopiedHint('삭제 요청 실패!'));
+  }
+
+  function renderCollapsedRightIcons() {
+    const iconsBox = document.querySelector('.collapsed-right-icons');
+    iconsBox.innerHTML = '';
+    const count = window.notesCount || 0;
+    for (let i = 0; i < count; i++) {
+      iconsBox.innerHTML += `<button class="collapsed-icon" tabindex="-1" style="font-size: 23px; background: none; border: none;">📝</button>`;
+    }
+  }
+
+  function openPromptModal() {
+    // user_id=1로 고정하여 default 프롬프트만 조회
+    fetch(`/api/prompts?user_id=1`)
+      .then(res => res.json())
+      .then(data => {
+        let prompts = {};
+        (data.prompts || []).forEach(item => { prompts[item.prompt_type] = item.content; });
+        document.getElementById('prompt-role-view').innerText = prompts['role'] || '';
+        // document.getElementById('prompt-instruction-view').innerText = prompts['instruction'] || '';
+        // document.getElementById('prompt-examples-view').innerText = prompts['examples'] || '';
+        document.getElementById('prompt-modal').style.display = 'flex';
+      });
+  }
+  
+  function closePromptModal() {
+    document.getElementById('prompt-modal').style.display = 'none';
+  }
+</script>
+</body>
+</html>
