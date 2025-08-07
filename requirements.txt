@@ -1,0 +1,27 @@
+fastapi
+uvicorn
+vertexai
+google-cloud-storage
+google-cloud-aiplatform
+google-genai==1.11.0  # 최신 공식 버전
+langchain
+langsmith
+langchain_community
+langchain_core
+python-dotenv
+pydantic
+jinja2
+psycopg2-binary
+python-multipart
+google-generativeai
+# pgvector==0.2.4
+pgvector
+langchain-postgres
+psycopg
+pandas
+pyarrow
+google-cloud-storage
+google-cloud-tasks
+sentence-transformers
+# AutoRAG
+# AutoRAG[gpu,parse]
