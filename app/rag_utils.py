@@ -230,14 +230,18 @@ def build_rag_prompt(
     > This strict liability provision does not apply to occupational injuries, illnesses, or deaths of workers that occur during business activities. Those cases are covered by other laws, such as the Industrial Accident Compensation Insurance Act.
     """
 
+#     if context_chunks:
+#         context_text = "\n\n".join(
+#             f"(출처: 제목={chunk['metadata'].get('title', chunk['metadata'].get('source_file_name', '알 수 없음'))}, "
+#             f"페이지={chunk.get('page_number', '?')})\n{chunk['content']}"
+#             for chunk in context_chunks
+#         )
+
     if context_chunks:
-        context_text = "\n\n".join(
-            f"(출처: 제목={chunk['metadata'].get('title', chunk['metadata'].get('source_file_name', '알 수 없음'))}, "
-            f"페이지={chunk.get('page_number', '?')})\n{chunk['content']}"
-            for chunk in context_chunks
-        )
+        context_text = "\n\n".join(chunk["content"] for chunk in context_chunks)
 
         prompt = f"""너는 ESG 문서를 참고하여 사용자 질문에 답변하는 AI야.
+
 You are an AI assistant that answers questions based on ESG documents.
 
 - 문서에 관련된 정보가 있다면 해당 내용을 바탕으로 답변해.
