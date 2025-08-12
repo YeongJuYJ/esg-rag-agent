@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy import text
 from db import init_db, create_chat_session, log_chat, SessionLocal, User, LoginLog, ChatSession, ChatLog, Note, PromptConfig, get_prompt_config, upsert_prompt_config, delete_prompt_config
 from db_vector import get_alloydb
@@ -36,7 +36,6 @@ from langchain_community.vectorstores.pgvector import PGVector
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-
 
 # Logging setup
 logging.basicConfig(level=logging.DEBUG)
@@ -84,8 +83,8 @@ templates = Jinja2Templates(directory="app/templates")
 # In-memory chat history
 user_chat_histories: Dict[tuple, ChatMessageHistory] = {}
 
-# model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
-model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-v2-m3")
+model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+# model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-v2-m3")
 
 compressor = CrossEncoderReranker(model=model, top_n=5)
 
@@ -196,7 +195,7 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
     logging.debug(f"[RAG] Original question: {user_question}")
     logging.debug(f"[RAG] Paraphrased questions: {all_questions[1:]}")
 
-    # 전체 질문 리스트를 명확히 로그로 남김
+    # 전체 질문 리스트 로그
     for idx, q in enumerate(all_questions):
         kind = "원본" if idx == 0 else f"paraphrase_{idx}"
         logging.info(f"[RAG] 검색에 사용될 질문 ({kind}): {q}")
@@ -205,15 +204,20 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
     seen_texts = set()
     loop = asyncio.get_running_loop()
 
+    # per-thread 세션 생성
+    ThreadSession = sessionmaker(bind=alloydb_session.get_bind(), autoflush=False, autocommit=False)
+
     def query_task(q):
-        sql_retriever = SQLRetriever(db=alloydb_session, top_k=5)
-        try:
-            docs = sql_retriever.get_relevant_documents(q)
-            logging.info(f"[RAG] 질문: {q[:100]} ... => 검색 결과 {len(docs)}건")
-            return q, docs
-        except Exception as e:
-            logging.warning(f"[RAG] Retrieval failed for '{q}': {e}")
-            return q, []
+        with ThreadSession() as local_db:
+            sql_retriever = SQLRetriever(db=local_db, top_k=5)
+            try:
+                docs = sql_retriever.get_relevant_documents(q)   # (invoke로 바꿔도 됨)
+                logging.info(f"[RAG] 질문: {q[:100]} ... => 검색 결과 {len(docs)}건")
+                return q, docs
+            except Exception as e:
+                logging.warning(f"[RAG] Retrieval failed for '{q}': {e}")
+                return q, []
+
     with concurrent.futures.ThreadPoolExecutor() as executor:
         tasks = [loop.run_in_executor(executor, query_task, q) for q in all_questions]
         results = await asyncio.gather(*tasks)
