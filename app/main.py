@@ -84,13 +84,10 @@ templates = Jinja2Templates(directory="app/templates")
 # In-memory chat history
 user_chat_histories: Dict[tuple, ChatMessageHistory] = {}
 
-# reranker = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
-model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+# model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-v2-m3")
+
 compressor = CrossEncoderReranker(model=model, top_n=5)
-compression_retriever = ContextualCompressionRetriever(
-    base_retriever=retriever,
-    base_compressor=compressor
-)
 
 def get_all_documents(db: Session):
     return db.execute("SELECT id, title, source_uri, created_at FROM documents ORDER BY created_at DESC").fetchall()
@@ -153,7 +150,7 @@ class SQLRetriever(BaseRetriever):
 
     db: Session
     top_k: int = 5
-    
+
     def get_relevant_documents(self, query: str) -> List[Document]:
         # 1) 질문 임베딩
         emb = embed_query(query)
@@ -233,49 +230,39 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
 
     logging.debug(f"[RAG] Total unique docs retrieved: {len(retrieved_docs)}")
 
+    base_retriever = SQLRetriever(db=alloydb_session, top_k=20)
+
+    compression_retriever = ContextualCompressionRetriever(
+        base_retriever=base_retriever,
+        base_compressor=compressor
+    )
+
     compressed_docs = compression_retriever.invoke(user_question)
 
     for idx, doc in enumerate(compressed_docs, start=1):
-        score = doc.metadata.get("score")
-        title = doc.metadata.get("title") or doc.metadata.get("source_file_name")
-        logging.debug(f"[RERANK] Rank {idx}: title={title}, score={score:.4f}")
+        meta  = doc.metadata or {}
+        title = meta.get("title") or meta.get("source_file_name") or "알 수 없음"
+        page  = meta.get("page_number", "N/A")
+        score = meta.get("score")
+        logging.debug(f"[RERANK] Rank {idx}: title={title}, page={page}, score={score}")
 
-    # reranker logs
-    # reranked_docs = compressor.compress_documents(
-    #     documents=retrieved_docs, 
-    #     query=user_question
-    # )
-    # for idx, doc in enumerate(reranked_docs, start=1):
-    #     score = doc.metadata.get("score")
-    #     title = doc.metadata.get("title") or doc.metadata.get("source_file_name")
-    #     logging.info(f"[RERANK] Rank {idx}: title={title}, score={score:.4f}")
 
     # 2. context_chunks 구성 (최대 5개 사용)
     context_chunks = []
     for doc in compressed_docs:
-        meta = doc.metadata or {}
-        title = meta.get("title") or meta.get("source_file_name")
+        meta   = doc.metadata or {}
+        title  = meta.get("title") or meta.get("source_file_name") or "알 수 없음"
+        page   = meta.get("page_number", "N/A")
         preview = doc.page_content.replace("\n", " ")[:80]
-        logging.debug(f"[RAG] Using chunk: title={title}, page={meta.get('page_number')}, preview={preview}")
+        logging.debug(f"[RAG] Using chunk: title={title}, page={page}, preview={preview}")
+
+        cited_content = f"{doc.page_content.strip()} (출처: 제목={title}, 페이지={page})"
         context_chunks.append({
-            "content": doc.page_content,
-            "page_number": meta.get("page_number"),
+            "content": cited_content,
+            "page_number": page,
             "block_type": meta.get("block_type"),
             "metadata": meta,
         })
-
-    # context_chunks = []
-    # for doc in reranked_docs:
-    #     meta = doc.metadata or {}
-    #     title = meta.get("title") or meta.get("source_file_name")
-    #     preview = doc.page_content.replace("\n", " ")[:80]
-    #     logging.debug(f"[RAG] Using chunk: title={title}, page={meta.get('page_number')}, preview={preview}")
-    #     context_chunks.append({
-    #         "content": doc.page_content,
-    #         "page_number": meta.get("page_number"),
-    #         "block_type": meta.get("block_type"),
-    #         "metadata": meta,
-    #     })
 
     # 3. 프롬프트 구성
     get_user_chat_history(user_id, session_id)
