@@ -7,8 +7,8 @@ import re
 import json
 import concurrent.futures
 
-from dotenv import load_dotenv, find_dotenv
-load_dotenv(find_dotenv(), override=False)
+from dotenv import load_dotenv
+load_dotenv()
 
 import requests
 import vertexai
@@ -36,8 +36,6 @@ from langchain_community.vectorstores.pgvector import PGVector
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-
-from huggingface_hub import login, HfFolder
 
 # Logging setup
 logging.basicConfig(level=logging.DEBUG)
@@ -88,20 +86,7 @@ user_chat_histories: Dict[tuple, ChatMessageHistory] = {}
 model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
 # model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-v2-m3")
 
-compressor = CrossEncoderReranker(model=model, top_n=5)
-
-os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")     # 대용량 모델 빠른 전송
-os.environ.setdefault("TRANSFORMERS_CACHE", "/tmp/hf-cache")  # Cloud Run 임시 디스크 캐시
-
-token = os.getenv("HUGGINGFACE_HUB_TOKEN")
-if token:
-    try:
-        login(token=token, add_to_git_credential=False)  # 토큰을 세션에 등록
-        logging.info("[HF] token detected and loaded.")
-    except Exception as e:
-        logging.warning("[HF] login() failed: %s", e)
-else:
-    logging.warning("[HF] HUGGINGFACE_HUB_TOKEN not set.")
+compressor = CrossEncoderReranker(model=model, top_n=14)
 
 def get_all_documents(db: Session):
     return db.execute("SELECT id, title, source_uri, created_at FROM documents ORDER BY created_at DESC").fetchall()
@@ -224,7 +209,7 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
 
     def query_task(q):
         with ThreadSession() as local_db:
-            sql_retriever = SQLRetriever(db=local_db, top_k=5)
+            sql_retriever = SQLRetriever(db=local_db, top_k=8)
             try:
                 docs = sql_retriever.get_relevant_documents(q)   # (invoke로 바꿔도 됨)
                 logging.info(f"[RAG] 질문: {q[:100]} ... => 검색 결과 {len(docs)}건")
@@ -249,26 +234,76 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
 
     logging.debug(f"[RAG] Total unique docs retrieved: {len(retrieved_docs)}")
 
-    base_retriever = SQLRetriever(db=alloydb_session, top_k=20)
+    # base_retriever = SQLRetriever(db=alloydb_session, top_k=20)
+    base_retriever = SQLRetriever(db=alloydb_session, top_k=60)
 
-    compression_retriever = ContextualCompressionRetriever(
-        base_retriever=base_retriever,
-        base_compressor=compressor
-    )
+    # compression_retriever = ContextualCompressionRetriever(
+    #     base_retriever=base_retriever,
+    #     base_compressor=compressor
+    # )
 
-    compressed_docs = compression_retriever.invoke(user_question)
+    # compressed_docs = compression_retriever.invoke(user_question)
+
+    candidates = retrieved_docs[:]  # 위에서 중복 제거(set)까지 끝난 리스트
+
+    # 1) 후보가 너무 적으면 원질문으로 보강
+    if len(candidates) < 14:
+        booster = SQLRetriever(db=alloydb_session, top_k=60)
+        more = booster.get_relevant_documents(user_question)
+        seen = set(d.page_content for d in candidates)
+        for d in more:
+            if d.page_content not in seen:
+                candidates.append(d); seen.add(d.page_content)
+
+    # 2) ‘필터’ 대신 ‘정렬’: CrossEncoder로 재정렬만 수행
+    # reranked = compressor.compress_documents(documents=candidates, query=user_question)
+    def _clean_for_rerank(doc: Document) -> Document:
+        text = re.sub(r'\s+', ' ', doc.page_content).strip()
+        text = re.sub(r'\(출처:[^)]+\)\s*$', '', text)  # 본문 끝의 출처 꼬리 제거
+        text = text[:1800]  # ≈ 450~550 tokens
+        return Document(page_content=text, metadata=doc.metadata)
+
+    candidates_clean = [_clean_for_rerank(d) for d in candidates]
+    reranked = compressor.compress_documents(documents=candidates_clean, query=user_question)
+
+    # 3) 상위 K만 보존(과필터링 방지용 floor 개념)
+    # compressed_docs = reranked[:14]
+
+    keep_k = 14
+    compressed_docs = reranked[:keep_k]
+    if len(compressed_docs) < keep_k:
+        booster = SQLRetriever(db=alloydb_session, top_k=60)
+        more = booster.get_relevant_documents(user_question)
+        seen = set(d.page_content for d in compressed_docs)
+        for d in more:
+            if d.page_content not in seen:
+                compressed_docs.append(d); seen.add(d.page_content)
+                if len(compressed_docs) >= keep_k:
+                    break
 
     for idx, doc in enumerate(compressed_docs, start=1):
         meta  = doc.metadata or {}
         title = meta.get("title") or meta.get("source_file_name") or "알 수 없음"
         page  = meta.get("page_number", "N/A")
-        score = meta.get("score")
+        score = meta.get("relevance_score", meta.get("score"))
         logging.debug(f"[RERANK] Rank {idx}: title={title}, page={page}, score={score}")
 
 
-    # 2. context_chunks 구성 (최대 5개 사용)
+    def _take_diverse_by_title(docs: List[Document], k: int = 8, per_title: int = 2):
+        picked, seen_per = [], {}
+        for d in docs:
+            meta = d.metadata or {}
+            title = meta.get("title") or meta.get("source_file_name") or "UNK"
+            cnt = seen_per.get(title, 0)
+            if cnt < per_title:
+                picked.append(d); seen_per[title] = cnt + 1
+            if len(picked) >= k: break
+        return picked
+
+    # 2. context_chunks 구성
     context_chunks = []
-    for doc in compressed_docs:
+    # for doc in compressed_docs:
+    for doc in _take_diverse_by_title(compressed_docs, k=8, per_title=2):
         meta   = doc.metadata or {}
         title  = meta.get("title") or meta.get("source_file_name") or "알 수 없음"
         page   = meta.get("page_number", "N/A")
@@ -295,7 +330,7 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
         None,
         lambda: text_model.generate_content(
             final_prompt,
-            generation_config={"candidate_count": 1, "max_output_tokens": 2048, "temperature": 0.6}
+            generation_config={"candidate_count": 1, "max_output_tokens": 2048, "temperature": 0.35}
         )
     )
     answer = resp.text
@@ -318,15 +353,23 @@ def generate_paraphrases(prompt: str, count: int = 3) -> list[str]:
     lines = [line.strip() for line in response.text.strip().split("\n") if line.strip()]
     # 1. "1.", "2.", "3." 또는 "- "로 시작하는 줄만 남기기
     # 2. 또는, 첫 줄이 안내문이면 제외하고 2번째 줄부터 count개 추출
-    filtered = []
+    # filtered = []
+    # for line in lines:
+    #     if re.match(r'^(\d+[.])|(-|\*) ', line):  # 1. ~ or - ~ or * ~
+    #         filtered.append(line)
+    #     elif len(filtered) == 0 and len(lines) > 1 and len(lines) <= (count+1):
+    #         # 안내문 패턴이면 패스(첫 줄만 안내문이고, 나머지 3개면 사용)
+    #         continue
+    # # count개만 리턴
+    # return filtered[:count]
+
+    cleaned = []
     for line in lines:
-        if re.match(r'^(\d+[.])|(-|\*) ', line):  # 1. ~ or - ~ or * ~
-            filtered.append(line)
-        elif len(filtered) == 0 and len(lines) > 1 and len(lines) <= (count+1):
-            # 안내문 패턴이면 패스(첫 줄만 안내문이고, 나머지 3개면 사용)
-            continue
-    # count개만 리턴
-    return filtered[:count]
+        # 맨 앞 불릿/번호 제거: "1. ", "1) ", "- ", "* "
+        text = re.sub(r'^\s*(?:\d+[.)]|[-*])\s*', '', line)
+        if text:
+            cleaned.append(text)
+    return cleaned[:count]
 
 # DB session dependency
 def get_db():

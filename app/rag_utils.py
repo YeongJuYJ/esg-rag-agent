@@ -27,7 +27,7 @@ def search_chunks_by_embedding(
     embedding: List[float],
     db: Session,
     top_k: int = 5,
-    similarity_threshold: float = 0.7,  # 완화된 임계값
+    similarity_threshold: float = 0.5,
     enable_fallback: bool = True
 ) -> List[Dict[str, Any]]:
     import logging
@@ -46,7 +46,7 @@ def search_chunks_by_embedding(
     result = db.execute(sql).fetchall()
 
     # fallback: 필터 결과가 너무 적은 경우 top-k만 사용
-    if enable_fallback and len(result) < 3:
+    if enable_fallback and len(result) < 5:
         logging.warning(f"[RAG] Only {len(result)} chunks passed threshold ({similarity_threshold}). Falling back to top-{top_k}.")
         sql = text(f"""
             SELECT content, page_number, block_type, metadata,
@@ -121,7 +121,8 @@ def build_rag_prompt(
     - **표/코드**: 필요하다면 표(`|`)나 코드 블록(```)을 자유롭게 사용해도 좋아.
     - **간결성**: 불필요한 미사여구나 서론 없이 핵심 정보만 명확하게 전달해줘.
     - **문단 구분**: 내용의 흐름에 맞게 문단을 자연스럽게 나눠줘.
-    - **참조 표기**: 문서에서 인용하거나 참고한 내용 뒤에는 반드시 `(출처: 제목={title}, 페이지={page})` 형식으로 표시해줘. 예를 들면  
+    - **핵심 문장 출처 표기**: 답변에서 각 핵심 사실(문장) 뒤에 `(출처: 제목={title}, 페이지={page})` 형식으로 반드시 출처를 달아 줘.
+    - **참조 표기**: 문서에서 인용하거나 참고한 내용 뒤에는 반드시 `(출처: 제목={title}, 페이지={page})` 형식으로 표시해줘. 예를 들면
       ```
       해당 규칙은 엄격합니다. (출처: Sustainability Report 2024, 페이지=63)
       ```
@@ -230,13 +231,6 @@ def build_rag_prompt(
     > This strict liability provision does not apply to occupational injuries, illnesses, or deaths of workers that occur during business activities. Those cases are covered by other laws, such as the Industrial Accident Compensation Insurance Act.
     """
 
-#     if context_chunks:
-#         context_text = "\n\n".join(
-#             f"(출처: 제목={chunk['metadata'].get('title', chunk['metadata'].get('source_file_name', '알 수 없음'))}, "
-#             f"페이지={chunk.get('page_number', '?')})\n{chunk['content']}"
-#             for chunk in context_chunks
-#         )
-
     if context_chunks:
         context_text = "\n\n".join(chunk["content"] for chunk in context_chunks)
 
@@ -248,6 +242,7 @@ You are an AI assistant that answers questions based on ESG documents.
   If relevant information exists in the documents, base your answer on it.
 
 - 답변할 때 참고한 문서의 제목, 페이지 번호를 반드시 포함해.
+- 답변 시 각 핵심 문장 뒤에 반드시 (출처: 제목={{title}}, 페이지={{page}}) 를 포함해 줘.
   When referencing, always include the document title and page number.
 
 - 문서에도 없고 너의 지식으로도 확실하지 않은 경우에는 사실이 아닌 내용을 지어내지 말고,
