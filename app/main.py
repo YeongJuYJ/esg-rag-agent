@@ -2,7 +2,9 @@ import os
 import uuid
 import logging
 import asyncio
-from typing import Dict, Optional, List, Any
+import time
+import hashlib
+from typing import Dict, Optional, List, Any, Tuple
 import re
 import json
 import concurrent.futures
@@ -17,7 +19,7 @@ from vertexai.generative_models import GenerativeModel
 from fastapi import FastAPI, HTTPException, Request, Response, Form, Depends, Cookie, APIRouter, Query, Body
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy import text
@@ -141,9 +143,17 @@ class QueryRequest(BaseModel):
     session_id: Optional[str] = None
     messages: List[Message]
 
+class RetrievedContext(BaseModel):
+    content: str
+    page_number: Optional[int] = None
+    block_type: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    title: Optional[str] = None
+
 class QueryResponse(BaseModel):
     response: str
     session_id: str
+    retrieved_contexts: List[RetrievedContext] = Field(default_factory=list)
 
 class SQLRetriever(BaseRetriever):
 
@@ -181,50 +191,208 @@ def check_langsmith_connection():
 
 check_langsmith_connection()
 
+# --- 경량 생성·개별 타임아웃·인메모리 TTL 캐시 유틸 ---
+
+# 경량 생성 파라미터(지연/비용 상한)
+PARA_MAX_TOKENS = 90
+HYDE_MAX_TOKENS = 160
+PARA_TIMEOUT = 1.5   # seconds
+HYDE_TIMEOUT  = 2.0  # seconds
+
+# TTL 캐시 (in-memory; 멀티 인스턴스면 추후 Redis 전환)
+TTL_SECONDS = 6 * 60 * 60  # 6시간
+_cache: Dict[str, tuple] = {}  # key -> (expire_ts: int, value: Any)
+
+def _now() -> int:
+    return int(time.time())
+
+def _norm(s: str) -> str:
+    # 공백/대소문자 정규화: 캐시 키 안정화
+    return re.sub(r"\s+", " ", s.strip().lower())
+
+def _ck(kind: str, q: str) -> str:
+    # 내부용이므로 버전 태깅 없이 간단 키 사용
+    return f"{kind}:{hashlib.sha1(_norm(q).encode()).hexdigest()}"
+
+def cache_get(kind: str, q: str):
+    key = _ck(kind, q)
+    item = _cache.get(key)
+    if not item:
+        return None
+    exp, val = item
+    if exp < _now():
+        _cache.pop(key, None)
+        return None
+    return val
+
+def cache_set(kind: str, q: str, val):
+    _cache[_ck(kind, q)] = (_now() + TTL_SECONDS, val)
+
+
+# --- 경량 Paraphrase/HyDE 생성기 ---
+
+def gen_paraphrases_light(q: str, n: int = 1) -> List[str]:
+    """
+    한 문장 paraphrase만 간결히 생성 (candidate=1, max_tokens 제한).
+    """
+    prompt = f"""다음 문장을 의미 유지해 {n}개, 한 문장씩 간결히 의역해줘.
+- 번호/불릿 금지, 문장만 반환
+문장: "{q}" """
+    resp = paraphrase_model.generate_content(
+        prompt,
+        generation_config={
+            "candidate_count": 1,
+            "max_output_tokens": PARA_MAX_TOKENS,
+            "temperature": 0.3
+        }
+    )
+    text = (getattr(resp, "text", "") or "")
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    return lines[:n]
+
+def gen_hyde_light(q: str) -> str:
+    """
+    HyDE를 4~6문장으로 제한해 일반론/장문화 방지 + 지연 통제.
+    """
+    prompt = f"""질문에 대한 배경지식/핵심요지를 한국어로 4~6문장, 간결히 작성해줘.
+- 제목/불릿 금지, 본문만
+질문: {q}"""
+    resp = paraphrase_model.generate_content(
+        prompt,
+        generation_config={
+            "candidate_count": 1,
+            "max_output_tokens": HYDE_MAX_TOKENS,
+            "temperature": 0.3
+        }
+    )
+    return (getattr(resp, "text", "") or "").strip()
+
+
+# --- 동시 실행 + 타임아웃 + 캐시 + 폴백 래퍼 ---
+
+async def get_light_queries(question: str, want_para: int = 1):
+    """
+    - 캐시 조회 → 없으면 경량 Paraphrase/HyDE를 '동시에' 생성(각각 타임아웃)
+    - 성공분만 캐시 저장
+    - 최종 질의: [원문] + optional(para1) + optional(hyde1)
+    - 둘 다 실패/지연해도 '원문만'으로 즉시 진행(폴백)
+    """
+    cached_para = cache_get("para", question)
+    cached_hyde = cache_get("hyde", question)
+
+    async def run_para():
+        if cached_para is not None:
+            return cached_para
+        return await asyncio.to_thread(gen_paraphrases_light, question, want_para)
+
+    async def run_hyde():
+        if cached_hyde is not None:
+            return cached_hyde
+        return await asyncio.to_thread(gen_hyde_light, question)
+
+    tasks = [
+        asyncio.wait_for(run_para(), timeout=PARA_TIMEOUT),
+        asyncio.wait_for(run_hyde(), timeout=HYDE_TIMEOUT),
+    ]
+
+    paras: List[str] = []
+    hyde: Optional[str] = None
+    try:
+        done, pending = await asyncio.wait(
+            tasks, timeout=max(PARA_TIMEOUT, HYDE_TIMEOUT)
+        )
+        # 완료된 것만 반영
+        for t in done:
+            try:
+                v = t.result()
+                if isinstance(v, list):
+                    paras = v or []
+                else:
+                    hyde = (v or "").strip() or None
+            except Exception:
+                logging.warning("[RAG] LightGen task failed/timeout", exc_info=False)
+        # 남은 태스크 취소
+        for p in pending:
+            p.cancel()
+        if pending:
+            logging.debug(f"[RAG] cancelled {len(pending)} light-gen task(s)")
+    except Exception:
+        logging.warning("[RAG] LightGen wait failed", exc_info=False)
+
+    # 성공분만 캐시
+    if cached_para is None and paras:
+        cache_set("para", question, paras)
+    if cached_hyde is None and hyde:
+        cache_set("hyde", question, hyde)
+
+    # 폴백 포함 최종 질의 세트
+    queries = [question]
+    if paras:
+        queries += paras[:1]  # Paraphrase 1개만 사용
+    if hyde:
+        queries += [hyde]     # HyDE 1개 사용
+    return queries, {"para_cached": cached_para is not None, "hyde_cached": cached_hyde is not None}
+
+
+# ---------------------- get_model_response ----------------------
+
 @traceable
-async def get_model_response(user_id: str, session_id: str, user_question: str, alloydb_session: Session) -> str:
+async def get_model_response(
+    user_id: str,
+    session_id: str,
+    user_question: str,
+    alloydb_session: Session
+) -> Tuple[str, List[Dict[str, Any]]]: # 반환 타입 변경
+
+    # JSON 직렬화를 위한 유틸리티 함수 추가
+    def _jsonable(o):
+        try:
+            return json.loads(json.dumps(o, default=str))
+        except Exception:
+            return str(o)
+
     hist = get_user_chat_history(user_id, session_id)
 
-    # '과거 대화를 요구하는' 질문인데 히스토리가 없거나 1개 이하면 안내문구
     if is_history_query(user_question) and len(hist.messages) <= 1:
-        return "요약할 과거 대화가 없습니다. 먼저 대화를 시작해 주세요."
+        return "요약할 과거 대화가 없습니다. 먼저 대화를 시작해 주세요.", []
 
-    paraphrased = fetch_paraphrases_for(user_question)
-    all_questions = [user_question] + paraphrased if paraphrased else [user_question]
+    # ---------------- 질의 생성부 (교체된 부분) ----------------
+    all_questions, cache_info = await get_light_queries(user_question, want_para=1)
 
-    logging.debug(f"[RAG] Original question: {user_question}")
-    logging.debug(f"[RAG] Paraphrased questions: {all_questions[1:]}")
-
-    # 전체 질문 리스트 로그
+    logging.info(
+        f"[RAG] queries={len(all_questions)} "
+        f"(para_cached={cache_info['para_cached']}, hyde_cached={cache_info['hyde_cached']})"
+    )
     for idx, q in enumerate(all_questions):
-        kind = "원본" if idx == 0 else f"paraphrase_{idx}"
-        logging.info(f"[RAG] 검색에 사용될 질문 ({kind}): {q}")
+        kind = ["원문", "paraphrase", "HyDE"][idx] if idx < 3 else f"q{idx}"
+        logging.info(f"[RAG] 검색 질의({kind}): {q[:120]}")
+    # -----------------------------------------------------------
 
     retrieved_docs: List[Document] = []
     seen_texts = set()
     loop = asyncio.get_running_loop()
 
-    # per-thread 세션 생성
     ThreadSession = sessionmaker(bind=alloydb_session.get_bind(), autoflush=False, autocommit=False)
 
     def query_task(q):
         with ThreadSession() as local_db:
             sql_retriever = SQLRetriever(db=local_db, top_k=8)
             try:
-                docs = sql_retriever.get_relevant_documents(q)   # (invoke로 바꿔도 됨)
+                docs = sql_retriever.get_relevant_documents(q)
                 logging.info(f"[RAG] 질문: {q[:100]} ... => 검색 결과 {len(docs)}건")
                 return q, docs
             except Exception as e:
                 logging.warning(f"[RAG] Retrieval failed for '{q}': {e}")
                 return q, []
 
+    # 동시 검색 실행
     with concurrent.futures.ThreadPoolExecutor() as executor:
         tasks = [loop.run_in_executor(executor, query_task, q) for q in all_questions]
         results = await asyncio.gather(*tasks)
 
     for q, docs in results:
         if q != user_question and len(docs) < 2:
-            logging.debug(f"[RAG] Skipping paraphrased query due to insufficient results: {q}")
+            logging.debug(f"[RAG] Skipping paraphrased/HyDE query due to insufficient results: {q}")
             continue
         for doc in docs:
             hashable = hash(doc.page_content)
@@ -234,19 +402,8 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
 
     logging.debug(f"[RAG] Total unique docs retrieved: {len(retrieved_docs)}")
 
-    # base_retriever = SQLRetriever(db=alloydb_session, top_k=20)
-    base_retriever = SQLRetriever(db=alloydb_session, top_k=60)
+    candidates = retrieved_docs[:]
 
-    # compression_retriever = ContextualCompressionRetriever(
-    #     base_retriever=base_retriever,
-    #     base_compressor=compressor
-    # )
-
-    # compressed_docs = compression_retriever.invoke(user_question)
-
-    candidates = retrieved_docs[:]  # 위에서 중복 제거(set)까지 끝난 리스트
-
-    # 1) 후보가 너무 적으면 원질문으로 보강
     if len(candidates) < 14:
         booster = SQLRetriever(db=alloydb_session, top_k=60)
         more = booster.get_relevant_documents(user_question)
@@ -255,19 +412,14 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
             if d.page_content not in seen:
                 candidates.append(d); seen.add(d.page_content)
 
-    # 2) ‘필터’ 대신 ‘정렬’: CrossEncoder로 재정렬만 수행
-    # reranked = compressor.compress_documents(documents=candidates, query=user_question)
     def _clean_for_rerank(doc: Document) -> Document:
-        text = re.sub(r'\s+', ' ', doc.page_content).strip()
-        text = re.sub(r'\(출처:[^)]+\)\s*$', '', text)  # 본문 끝의 출처 꼬리 제거
-        text = text[:1800]  # ≈ 450~550 tokens
-        return Document(page_content=text, metadata=doc.metadata)
+        textc = re.sub(r'\s+', ' ', doc.page_content).strip()
+        textc = re.sub(r'\(출처:[^)]+\)\s*$', '', textc)
+        textc = textc[:1800]
+        return Document(page_content=textc, metadata=doc.metadata)
 
     candidates_clean = [_clean_for_rerank(d) for d in candidates]
     reranked = compressor.compress_documents(documents=candidates_clean, query=user_question)
-
-    # 3) 상위 K만 보존(과필터링 방지용 floor 개념)
-    # compressed_docs = reranked[:14]
 
     keep_k = 14
     compressed_docs = reranked[:keep_k]
@@ -282,12 +434,11 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
                     break
 
     for idx, doc in enumerate(compressed_docs, start=1):
-        meta  = doc.metadata or {}
+        meta = doc.metadata or {}
         title = meta.get("title") or meta.get("source_file_name") or "알 수 없음"
-        page  = meta.get("page_number", "N/A")
+        page = meta.get("page_number", "N/A")
         score = meta.get("relevance_score", meta.get("score"))
         logging.debug(f"[RERANK] Rank {idx}: title={title}, page={page}, score={score}")
-
 
     def _take_diverse_by_title(docs: List[Document], k: int = 8, per_title: int = 2):
         picked, seen_per = [], {}
@@ -300,13 +451,14 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
             if len(picked) >= k: break
         return picked
 
-    # 2. context_chunks 구성
+    # context_chunks 구성
     context_chunks = []
-    # for doc in compressed_docs:
-    for doc in _take_diverse_by_title(compressed_docs, k=8, per_title=2):
-        meta   = doc.metadata or {}
-        title  = meta.get("title") or meta.get("source_file_name") or "알 수 없음"
-        page   = meta.get("page_number", "N/A")
+    # 답변 생성에 사용될 최종 컨텍스트를 다양성 필터를 적용해 선택
+    final_docs = _take_diverse_by_title(compressed_docs, k=8, per_title=2)
+    for doc in final_docs:
+        meta = doc.metadata or {}
+        title = meta.get("title") or meta.get("source_file_name") or "알 수 없음"
+        page = meta.get("page_number", "N/A")
         preview = doc.page_content.replace("\n", " ")[:80]
         logging.debug(f"[RAG] Using chunk: title={title}, page={page}, preview={preview}")
 
@@ -318,13 +470,10 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
             "metadata": meta,
         })
 
-    # 3. 프롬프트 구성
-    get_user_chat_history(user_id, session_id)
-
+    # 프롬프트 구성
     final_prompt = build_rag_prompt(context_chunks, user_question, history_messages=hist.messages)
 
-
-    # 4. 응답 생성
+    # 응답 생성
     loop = asyncio.get_running_loop()
     resp = await loop.run_in_executor(
         None,
@@ -336,10 +485,24 @@ async def get_model_response(user_id: str, session_id: str, user_question: str, 
     answer = resp.text
     logging.debug(f"[RAG] Final generated answer: {answer[:200]}...")
 
-    # 5. 히스토리 저장
+    # 히스토리 저장
     hist.add_user_message(HumanMessage(content=user_question))
     hist.add_ai_message(AIMessage(content=answer))
-    return answer
+
+    # 클라이언트로 내려줄 최종 컨텍스트(dict 리스트, 메타 포함)
+    retrieved_contexts: List[Dict[str, Any]] = []
+    for c in context_chunks:
+        meta = c.get("metadata") or {}
+        retrieved_contexts.append({
+            "content": c.get("content", ""),
+            "page_number": c.get("page_number"),
+            "block_type": c.get("block_type"),
+            "metadata": _jsonable(meta),
+            "title": meta.get("title") or meta.get("source_file_name") or None,
+        })
+
+    return answer, retrieved_contexts
+
 
 def generate_paraphrases(prompt: str, count: int = 3) -> list[str]:
     gemini_prompt = f"""
@@ -351,17 +514,6 @@ def generate_paraphrases(prompt: str, count: int = 3) -> list[str]:
 """
     response = paraphrase_model.generate_content(gemini_prompt)
     lines = [line.strip() for line in response.text.strip().split("\n") if line.strip()]
-    # 1. "1.", "2.", "3." 또는 "- "로 시작하는 줄만 남기기
-    # 2. 또는, 첫 줄이 안내문이면 제외하고 2번째 줄부터 count개 추출
-    # filtered = []
-    # for line in lines:
-    #     if re.match(r'^(\d+[.])|(-|\*) ', line):  # 1. ~ or - ~ or * ~
-    #         filtered.append(line)
-    #     elif len(filtered) == 0 and len(lines) > 1 and len(lines) <= (count+1):
-    #         # 안내문 패턴이면 패스(첫 줄만 안내문이고, 나머지 3개면 사용)
-    #         continue
-    # # count개만 리턴
-    # return filtered[:count]
 
     cleaned = []
     for line in lines:
@@ -460,13 +612,26 @@ async def chat_page(
 
 
 @app.post("/query", response_model=QueryResponse)
-async def query_model(req:QueryRequest, db:Session=Depends(get_db), alloydb:Session=Depends(get_alloydb)):
-    uid, ques = req.user_id, "\n".join(m.content for m in req.messages if m.role=="user")
-    sid = req.session_id or str(uuid.uuid4());
-    if not req.session_id: create_chat_session(db, uid, ques, sid)
-    ans = await get_model_response(uid, sid, ques, alloydb)
+async def query_model(
+    req: QueryRequest,
+    db: Session = Depends(get_db),
+    alloydb: Session = Depends(get_alloydb),
+):
+    uid = req.user_id
+    ques = "\n".join(m.content for m in req.messages if m.role == "user")
+    sid = req.session_id or str(uuid.uuid4())
+
+    if not req.session_id:
+        create_chat_session(db, uid, ques, sid)
+
+    ans, ctxs = await get_model_response(uid, sid, ques, alloydb)
     log_chat(db, uid, sid, ques, ans)
-    return QueryResponse(response=ans, session_id=sid)
+
+    return QueryResponse(
+        response=ans,
+        session_id=sid,
+        retrieved_contexts=ctxs
+    )
 
 @app.post("/load_history")
 async def load_history(payload: Dict[str,str], db:Session=Depends(get_db)):
@@ -492,9 +657,13 @@ async def reset_history(payload: Dict[str,str]):
     return {"message":"History cleared"}
 
 @app.get("/logout")
-async def logout(response:Response): response.delete_cookie("user_id"); return RedirectResponse(url="/login", status_code=302)
+async def logout(response:Response):
+    response.delete_cookie("user_id")
+    return RedirectResponse(url="/login", status_code=302)
+
 @app.get("/")
-async def root(): return RedirectResponse(url="/chat")
+async def root():
+    return RedirectResponse(url="/chat")
 
 @app.get("/debug_search")
 async def debug_search(alloydb: Session = Depends(get_alloydb)):
@@ -554,7 +723,7 @@ async def save_note_api(req: NoteSaveReq, db: Session = Depends(get_db)):
     db.add(note)
     db.commit()
     db.refresh(note)
-    return {"success": True, "note_id": note.id}   
+    return {"success": True, "note_id": note.id}
 
 
 @app.get("/get_notes")
