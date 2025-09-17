@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy import text
 from db import init_db, create_chat_session, log_chat, SessionLocal, User, LoginLog, ChatSession, ChatLog, Note, PromptConfig, get_prompt_config, upsert_prompt_config, delete_prompt_config
 from db_vector import get_alloydb
-from rag_utils import embed_query, build_rag_prompt, search_chunks_by_embedding
+from rag_utils import embed_query, build_rag_prompt, search_chunks_by_embedding, search_chunks_by_embedding_filtered
 
 from langsmith import traceable
 from langchain_community.chat_message_histories import ChatMessageHistory
@@ -142,6 +142,7 @@ class QueryRequest(BaseModel):
     user_id: str
     session_id: Optional[str] = None
     messages: List[Message]
+    filters: Optional[Dict[str, Any]] = None
 
 class RetrievedContext(BaseModel):
     content: str
@@ -159,13 +160,16 @@ class SQLRetriever(BaseRetriever):
 
     db: Session
     top_k: int = 5
+    filters: Optional[Dict[str, Any]] = None
 
     def get_relevant_documents(self, query: str) -> List[Document]:
         # 1) 질문 임베딩
         emb = embed_query(query)
         # 2) 수동 SQL 검색
-        chunks = search_chunks_by_embedding(emb, self.db, top_k=self.top_k)
+#         chunks = search_chunks_by_embedding(emb, self.db, top_k=self.top_k)
+        chunks = search_chunks_by_embedding_filtered(emb, self.db, top_k=self.top_k, filters=self.filters)
         # 3) langchain.Document 포맷으로 변환
+
         docs: List[Document] = []
         for chunk in chunks:
             md = chunk["metadata"] or {}
@@ -333,15 +337,13 @@ async def get_light_queries(question: str, want_para: int = 1):
         queries += [hyde]     # HyDE 1개 사용
     return queries, {"para_cached": cached_para is not None, "hyde_cached": cached_hyde is not None}
 
-
-# ---------------------- get_model_response ----------------------
-
 @traceable
 async def get_model_response(
     user_id: str,
     session_id: str,
     user_question: str,
-    alloydb_session: Session
+    alloydb_session: Session,
+    filters: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, List[Dict[str, Any]]]: # 반환 타입 변경
 
     # JSON 직렬화를 위한 유틸리티 함수 추가
@@ -376,7 +378,7 @@ async def get_model_response(
 
     def query_task(q):
         with ThreadSession() as local_db:
-            sql_retriever = SQLRetriever(db=local_db, top_k=8)
+            sql_retriever = SQLRetriever(db=local_db, top_k=8, filters=filters)
             try:
                 docs = sql_retriever.get_relevant_documents(q)
                 logging.info(f"[RAG] 질문: {q[:100]} ... => 검색 결과 {len(docs)}건")
@@ -405,7 +407,7 @@ async def get_model_response(
     candidates = retrieved_docs[:]
 
     if len(candidates) < 14:
-        booster = SQLRetriever(db=alloydb_session, top_k=60)
+        booster = SQLRetriever(db=alloydb_session, top_k=60, filters=filters)
         more = booster.get_relevant_documents(user_question)
         seen = set(d.page_content for d in candidates)
         for d in more:
@@ -424,7 +426,7 @@ async def get_model_response(
     keep_k = 14
     compressed_docs = reranked[:keep_k]
     if len(compressed_docs) < keep_k:
-        booster = SQLRetriever(db=alloydb_session, top_k=60)
+        booster = SQLRetriever(db=alloydb_session, top_k=60, filters=filters)
         more = booster.get_relevant_documents(user_question)
         seen = set(d.page_content for d in compressed_docs)
         for d in more:
@@ -624,7 +626,7 @@ async def query_model(
     if not req.session_id:
         create_chat_session(db, uid, ques, sid)
 
-    ans, ctxs = await get_model_response(uid, sid, ques, alloydb)
+    ans, ctxs = await get_model_response(uid, sid, ques, alloydb, filters=req.filters)
     log_chat(db, uid, sid, ques, ans)
 
     return QueryResponse(

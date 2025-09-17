@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 from google import genai
 from google.genai.types import EmbedContentConfig
@@ -22,6 +22,65 @@ def embed_query(text: str) -> List[float]:
         config=EmbedContentConfig(output_dimensionality=768)
     )
     return response.embeddings[0].values
+
+def _build_filter_clause(filters: dict) -> Tuple[str, dict]:
+    """
+    지원 키:
+      - jurisdiction: str
+      - language: str
+      - block_type: str | list[str]
+    """
+    clauses, params = [], {}
+    if not filters:
+        return "", {}
+
+    if j := filters.get("jurisdiction"):
+        clauses.append("(c.metadata->>'jurisdiction') = :juris")
+        params["juris"] = j
+    if l := filters.get("language"):
+        clauses.append("(c.metadata->>'language') = :lang")
+        params["lang"] = l
+    if bt := filters.get("block_type"):
+        if isinstance(bt, (list, tuple)):
+            clauses.append("(c.metadata->>'block_type') = ANY(:btypes)")
+            params["btypes"] = list(bt)
+        else:
+            clauses.append("(c.metadata->>'block_type') = :btype")
+            params["btype"] = bt
+
+    return (" AND " + " AND ".join(clauses)) if clauses else "", params
+
+
+def search_chunks_by_embedding_filtered(
+    embedding: list[float],
+    db,
+    top_k: int = 10,
+    filters: dict | None = None,
+):
+    """
+    pgvector <-> + 메타 필터 결합 검색
+    """
+    where_extra, p = _build_filter_clause(filters or {})
+    sql = text(f"""
+        SELECT id, content, metadata, page_number,
+               (embedding <-> :emb) AS dist
+        FROM chunks c
+        WHERE TRUE {where_extra}
+        ORDER BY embedding <-> :emb
+        LIMIT :k
+    """)
+    emb = "[" + ",".join(f"{x:.6f}" for x in embedding) + "]"  # pgvector literal
+    rows = db.execute(sql, {"emb": emb, "k": top_k, **p}).fetchall()
+    return [
+        {
+            "id": r.id,
+            "content": r.content,
+            "metadata": r.metadata,
+            "page_number": r.page_number,
+            "distance": r.dist,
+        }
+        for r in rows
+    ]
 
 def search_chunks_by_embedding(
     embedding: List[float],
