@@ -165,11 +165,30 @@ class SQLRetriever(BaseRetriever):
     def get_relevant_documents(self, query: str) -> List[Document]:
         # 1) 질문 임베딩
         emb = embed_query(query)
+
+        logging.info("[FILTER] using filters=%s", self.filters)
+
         # 2) 수동 SQL 검색
 #         chunks = search_chunks_by_embedding(emb, self.db, top_k=self.top_k)
         chunks = search_chunks_by_embedding_filtered(emb, self.db, top_k=self.top_k, filters=self.filters)
         # 3) langchain.Document 포맷으로 변환
 
+    mismatches = 0
+    if self.filters:
+        for ch in chunks:
+            md = ch.get("metadata") or {}
+            if j := self.filters.get("jurisdiction"):
+                mismatches += int((md.get("jurisdiction") != j))
+            if l := self.filters.get("language"):
+                mismatches += int((md.get("language") != l))
+            if bt := self.filters.get("block_type"):
+                b = md.get("block_type")
+                if isinstance(bt, (list, tuple)):
+                    mismatches += int(b not in bt)
+                else:
+                    mismatches += int(b != bt)
+        if mismatches:
+            logging.warning("[FILTER] %d mismatched rows detected under filters=%s", mismatches, self.filters)
         docs: List[Document] = []
         for chunk in chunks:
             md = chunk["metadata"] or {}
