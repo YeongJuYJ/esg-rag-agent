@@ -165,6 +165,8 @@ class SQLRetriever(BaseRetriever):
     def get_relevant_documents(self, query: str) -> List[Document]:
         # 1) 질문 임베딩
         emb = embed_query(query)
+        logging.info("[FILTER] using filters=%s", self.filters)
+
         # 2) 수동 SQL 검색
 #         chunks = search_chunks_by_embedding(emb, self.db, top_k=self.top_k)
         chunks = search_chunks_by_embedding_filtered(emb, self.db, top_k=self.top_k, filters=self.filters)
