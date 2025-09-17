@@ -9,8 +9,8 @@ import re
 import json
 import concurrent.futures
 
-from dotenv import load_dotenv
-load_dotenv()
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv(), override=False)
 
 import requests
 import vertexai
@@ -38,6 +38,8 @@ from langchain_community.vectorstores.pgvector import PGVector
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+
+from huggingface_hub import login, HfFolder
 
 # Logging setup
 logging.basicConfig(level=logging.DEBUG)
@@ -89,6 +91,19 @@ model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2
 # model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-v2-m3")
 
 compressor = CrossEncoderReranker(model=model, top_n=14)
+
+os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")     # 대용량 모델 빠른 전송
+os.environ.setdefault("TRANSFORMERS_CACHE", "/tmp/hf-cache")  # Cloud Run 임시 디스크 캐시
+
+token = os.getenv("HUGGINGFACE_HUB_TOKEN")
+if token:
+    try:
+        login(token=token, add_to_git_credential=False)  # 토큰을 세션에 등록
+        logging.info("[HF] token detected and loaded.")
+    except Exception as e:
+        logging.warning("[HF] login() failed: %s", e)
+else:
+    logging.warning("[HF] HUGGINGFACE_HUB_TOKEN not set.")
 
 def get_all_documents(db: Session):
     return db.execute("SELECT id, title, source_uri, created_at FROM documents ORDER BY created_at DESC").fetchall()
