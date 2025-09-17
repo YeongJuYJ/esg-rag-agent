@@ -9,8 +9,8 @@ import re
 import json
 import concurrent.futures
 
-from dotenv import load_dotenv, find_dotenv
-load_dotenv(find_dotenv(), override=False)
+from dotenv import load_dotenv
+load_dotenv()
 
 import requests
 import vertexai
@@ -38,8 +38,6 @@ from langchain_community.vectorstores.pgvector import PGVector
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-
-from huggingface_hub import login, HfFolder
 
 # Logging setup
 logging.basicConfig(level=logging.DEBUG)
@@ -91,19 +89,6 @@ model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2
 # model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-v2-m3")
 
 compressor = CrossEncoderReranker(model=model, top_n=14)
-
-os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")     # 대용량 모델 빠른 전송
-os.environ.setdefault("TRANSFORMERS_CACHE", "/tmp/hf-cache")  # Cloud Run 임시 디스크 캐시
-
-token = os.getenv("HUGGINGFACE_HUB_TOKEN")
-if token:
-    try:
-        login(token=token, add_to_git_credential=False)  # 토큰을 세션에 등록
-        logging.info("[HF] token detected and loaded.")
-    except Exception as e:
-        logging.warning("[HF] login() failed: %s", e)
-else:
-    logging.warning("[HF] HUGGINGFACE_HUB_TOKEN not set.")
 
 def get_all_documents(db: Session):
     return db.execute("SELECT id, title, source_uri, created_at FROM documents ORDER BY created_at DESC").fetchall()
@@ -180,30 +165,11 @@ class SQLRetriever(BaseRetriever):
     def get_relevant_documents(self, query: str) -> List[Document]:
         # 1) 질문 임베딩
         emb = embed_query(query)
-
-        logging.info("[FILTER] using filters=%s", self.filters)
-
         # 2) 수동 SQL 검색
 #         chunks = search_chunks_by_embedding(emb, self.db, top_k=self.top_k)
         chunks = search_chunks_by_embedding_filtered(emb, self.db, top_k=self.top_k, filters=self.filters)
         # 3) langchain.Document 포맷으로 변환
 
-    mismatches = 0
-    if self.filters:
-        for ch in chunks:
-            md = ch.get("metadata") or {}
-            if j := self.filters.get("jurisdiction"):
-                mismatches += int((md.get("jurisdiction") != j))
-            if l := self.filters.get("language"):
-                mismatches += int((md.get("language") != l))
-            if bt := self.filters.get("block_type"):
-                b = md.get("block_type")
-                if isinstance(bt, (list, tuple)):
-                    mismatches += int(b not in bt)
-                else:
-                    mismatches += int(b != bt)
-        if mismatches:
-            logging.warning("[FILTER] %d mismatched rows detected under filters=%s", mismatches, self.filters)
         docs: List[Document] = []
         for chunk in chunks:
             md = chunk["metadata"] or {}
