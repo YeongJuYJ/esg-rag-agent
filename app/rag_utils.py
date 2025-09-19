@@ -37,19 +37,26 @@ def _build_filter_clause(filters: dict) -> Tuple[str, dict]:
     if j := filters.get("jurisdiction"):
         clauses.append("(c.metadata->>'jurisdiction') = :juris")
         params["juris"] = j
+
     if l := filters.get("language"):
         clauses.append("(c.metadata->>'language') = :lang")
         params["lang"] = l
+
     if bt := filters.get("block_type"):
+        # 리스트/단일 모두 지원 (리스트일 때 안전한 OR 묶음으로 변환)
         if isinstance(bt, (list, tuple)):
-            clauses.append("(c.metadata->>'block_type') = ANY(:btypes)")
-            params["btypes"] = list(bt)
+            or_terms = []
+            for i, val in enumerate(bt):
+                key = f"btype_{i}"
+                or_terms.append(f"(c.metadata->>'block_type') = :{key}")
+                params[key] = val
+            if or_terms:
+                clauses.append("(" + " OR ".join(or_terms) + ")")
         else:
             clauses.append("(c.metadata->>'block_type') = :btype")
             params["btype"] = bt
 
     return (" AND " + " AND ".join(clauses)) if clauses else "", params
-
 
 def search_chunks_by_embedding_filtered(
     embedding: list[float],
@@ -62,11 +69,11 @@ def search_chunks_by_embedding_filtered(
     """
     where_extra, p = _build_filter_clause(filters or {})
     sql = text(f"""
-        SELECT id, content, metadata, page_number,
-               (embedding <-> :emb) AS dist
+        SELECT c.id, c.content, c.metadata, c.page_number, c.block_type,
+               (c.embedding <-> :emb::vector) AS dist
         FROM chunks c
         WHERE TRUE {where_extra}
-        ORDER BY embedding <-> :emb
+        ORDER BY c.embedding <-> :emb::vector
         LIMIT :k
     """)
     emb = "[" + ",".join(f"{x:.6f}" for x in embedding) + "]"  # pgvector literal
@@ -77,6 +84,7 @@ def search_chunks_by_embedding_filtered(
             "content": r.content,
             "metadata": r.metadata,
             "page_number": r.page_number,
+            "block_type": r.block_type,
             "distance": r.dist,
         }
         for r in rows
