@@ -64,16 +64,18 @@ def search_chunks_by_embedding_filtered(
     top_k: int = 10,
     filters: dict | None = None,
 ):
-    """
-    pgvector <-> + 메타 필터 결합 검색
-    """
     where_extra, p = _build_filter_clause(filters or {})
     sql = text(f"""
-        SELECT c.id, c.content, c.metadata, c.page_number, c.block_type,
-               (c.embedding <-> :emb::vector) AS dist
+        SELECT
+            c.id,
+            c.content,
+            c.metadata,
+            c.page_number,
+            c.block_type,
+            (c.embedding <-> CAST(:emb AS vector)) AS dist
         FROM chunks c
         WHERE TRUE {where_extra}
-        ORDER BY c.embedding <-> :emb::vector
+        ORDER BY c.embedding <-> CAST(:emb AS vector)
         LIMIT :k
     """)
     emb = "[" + ",".join(f"{x:.6f}" for x in embedding) + "]"  # pgvector literal
@@ -89,6 +91,7 @@ def search_chunks_by_embedding_filtered(
         }
         for r in rows
     ]
+
 
 def search_chunks_by_embedding(
     embedding: List[float],
