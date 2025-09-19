@@ -98,57 +98,60 @@ HISTORY_QUERY_KEYWORDS = [
     "요약", "방금", "이전", "아까", "되짚어", "다시", "대화 내역", "다시 말해", "요약해줘"
 ]
 
-# ---- 자동 메타 필터 추론기 ----
-JURIS_KEYWORDS = {
-    "CA": [r"캐나다", r"\bCanada\b", r"\bCSA\b", r"\bOSFI\b", r"Québec|Quebec", r"NI\s*51-107", r"\bISSB\b"],
-    "EU": [r"\bEU\b", r"유럽연합", r"\bCSRD\b", r"\bESRS\b", r"\bCBAM\b", r"\bECHA\b", r"\bEBA\b"],
-    "US": [r"\bUS(A)?\b", r"미국", r"\bSEC\b", r"California|Calif\.", r"\bEPA\b", r"\bFTC\b", r"SB[-\s]?253|SB[-\s]?261"],
-    "KR": [r"한국|대한민국", r"금감원", r"K[-\s]?Taxonomy|녹색분류체계"],
-    "JP": [r"일본|Japan", r"\bMETI\b", r"\bFSA\b", r"\bJIS\b"],
+# --------- Meta filter inference (jurisdiction / language / block_type) ---------
+JURIS_HINTS = {
+    "KR": ["한국", "대한민국", "국내", "K-"],
+    "CA": ["캐나다", "Canada", "캐나다 ESG", "CSA", "OSFI", "CPMM"],
+    "EU": ["EU", "유럽연합", "EC", "EU 지침", "EU 규정", "Brussels"],
+    "US": ["미국", "USA", "SEC", "CPSC", "EPA", "OSHA", "FTC"],
+    "JP": ["일본", "Japan", "METI"],
+}
+
+LANG_HINTS = {
+    "ko": ["한국어", "한글", "국문", "번역본(국문)"],
+    "en": ["영어", "English", "원문(영문)", "영문"],
+    "ja": ["일본어", "Japanese", "일문"],
 }
 
 BLOCKTYPE_HINTS = {
-    "table": ["표", "table", "표로", "테이블"],
-    "figure": ["그림", "도표", "figure", "chart", "그래프"],
-    "text": ["요약", "설명", "배경", "정의", "해설"],
+    "regulation": ["규정", "법", "법령", "시행령", "시행규칙", "지침", "directive", "regulation", "act"],
+    "report": ["보고서", "리포트", "백서", "연차보고서", "sustainability report"],
+    "news": ["뉴스", "기사", "보도자료", "press release"],
+    "faq": ["FAQ", "자주 묻는 질문", "질의응답"],
+    "standard": ["표준", "standard", "ISO", "국제표준"],
 }
 
-_KO_RX = re.compile(r"[\uac00-\ud7a3]")    # 한글
-_JA_RX = re.compile(r"[\u3040-\u30ff]")    # 히라/가타카나
+def _norm_text(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
 
-def infer_meta_filters(q: str) -> Optional[Dict[str, Any]]:
-    """질문으로부터 (jurisdiction/language/block_type) 필터를 가볍게 추론."""
-    if not q or not q.strip():
-        return None
-    text = q.strip()
+def infer_meta_filters(question: str) -> Optional[Dict[str, Any]]:
+    """
+    사용자의 질의 문장에서 jurisdiction/language/block_type 신호어를 추출해
+    필터 딕셔너리로 반환. 아무 힌트도 없으면 None.
+    """
+    q = _norm_text(question)
     filters: Dict[str, Any] = {}
 
-    # 1) 관할권
-    for code, patterns in JURIS_KEYWORDS.items():
-        if any(re.search(pat, text, flags=re.IGNORECASE) for pat in patterns):
+    # jurisdiction
+    for code, hints in JURIS_HINTS.items():
+        if any(h.lower() in q for h in hints):
             filters["jurisdiction"] = code
             break
 
-    # 2) 언어: 질문 문자열로 추정
-    if _KO_RX.search(text):
-        filters["language"] = "ko"
-    elif _JA_RX.search(text):
-        filters["language"] = "ja"
-    else:
-        # 프랑스어 흔적(간단 추정)
-        if re.search(r"Québec|Quebec|\b(le|la|les|des|du|de la)\b", text, re.IGNORECASE):
-            filters["language"] = "fr"
-        # 영어 기본치 (관할권이 US/EU/CA-EN일 경우)
-        elif "jurisdiction" in filters and filters["jurisdiction"] in {"US", "EU"}:
-            filters["language"] = "en"
-    bt = []
-        for k, hints in BLOCKTYPE_HINTS.items():
-            if any(h in text for h in hints):
-               bt.append(k)
-        if bt:
-            filters["block_type"] = bt
+    # language
+    for code, hints in LANG_HINTS.items():
+        if any(h.lower() in q for h in hints):
+            filters["language"] = code
+            break
 
-        return filters or None
+    # block_type (여러 개 가능 → 우선 1개만)
+    for k, hints in BLOCKTYPE_HINTS.items():
+        if any(h.lower() in q for h in hints):
+            filters["block_type"] = k
+            break
+
+    return filters or None
+
 
 def is_history_query(user_question: str) -> bool:
     """과거 대화를 요구하는 질문인지 판별"""
@@ -694,7 +697,8 @@ async def query_model(
     if not req.session_id:
         create_chat_session(db, uid, ques, sid)
 
-    ans, ctxs = await get_model_response(uid, sid, ques, alloydb, filters=req.filters)
+    auto_filters = req.filters or infer_meta_filters(ques)
+    ans, ctxs = await get_model_response(uid, sid, ques, alloydb, filters=auto_filters)
     log_chat(db, uid, sid, ques, ans)
 
     return QueryResponse(
