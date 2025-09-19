@@ -8,6 +8,7 @@ from typing import Dict, Optional, List, Any, Tuple
 import re
 import json
 import concurrent.futures
+import unicodedata
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -97,6 +98,58 @@ HISTORY_QUERY_KEYWORDS = [
     "요약", "방금", "이전", "아까", "되짚어", "다시", "대화 내역", "다시 말해", "요약해줘"
 ]
 
+# ---- 자동 메타 필터 추론기 ----
+JURIS_KEYWORDS = {
+    "CA": [r"캐나다", r"\bCanada\b", r"\bCSA\b", r"\bOSFI\b", r"Québec|Quebec", r"NI\s*51-107", r"\bISSB\b"],
+    "EU": [r"\bEU\b", r"유럽연합", r"\bCSRD\b", r"\bESRS\b", r"\bCBAM\b", r"\bECHA\b", r"\bEBA\b"],
+    "US": [r"\bUS(A)?\b", r"미국", r"\bSEC\b", r"California|Calif\.", r"\bEPA\b", r"\bFTC\b", r"SB[-\s]?253|SB[-\s]?261"],
+    "KR": [r"한국|대한민국", r"금감원", r"K[-\s]?Taxonomy|녹색분류체계"],
+    "JP": [r"일본|Japan", r"\bMETI\b", r"\bFSA\b", r"\bJIS\b"],
+}
+
+BLOCKTYPE_HINTS = {
+    "table": ["표", "table", "표로", "테이블"],
+    "figure": ["그림", "도표", "figure", "chart", "그래프"],
+    "text": ["요약", "설명", "배경", "정의", "해설"],
+}
+
+_KO_RX = re.compile(r"[\uac00-\ud7a3]")    # 한글
+_JA_RX = re.compile(r"[\u3040-\u30ff]")    # 히라/가타카나
+
+def infer_meta_filters(q: str) -> Optional[Dict[str, Any]]:
+    """질문으로부터 (jurisdiction/language/block_type) 필터를 가볍게 추론."""
+    if not q or not q.strip():
+        return None
+    text = q.strip()
+    filters: Dict[str, Any] = {}
+
+    # 1) 관할권
+    for code, patterns in JURIS_KEYWORDS.items():
+        if any(re.search(pat, text, flags=re.IGNORECASE) for pat in patterns):
+            filters["jurisdiction"] = code
+            break
+
+    # 2) 언어: 질문 문자열로 추정
+    if _KO_RX.search(text):
+        filters["language"] = "ko"
+    elif _JA_RX.search(text):
+        filters["language"] = "ja"
+    else:
+        # 프랑스어 흔적(간단 추정)
+        if re.search(r"Québec|Quebec|\b(le|la|les|des|du|de la)\b", text, re.IGNORECASE):
+            filters["language"] = "fr"
+        # 영어 기본치 (관할권이 US/EU/CA-EN일 경우)
+        elif "jurisdiction" in filters and filters["jurisdiction"] in {"US", "EU"}:
+            filters["language"] = "en"
+    bt = []
+        for k, hints in BLOCKTYPE_HINTS.items():
+            if any(h in text for h in hints):
+               bt.append(k)
+        if bt:
+            filters["block_type"] = bt
+
+        return filters or None
+
 def is_history_query(user_question: str) -> bool:
     """과거 대화를 요구하는 질문인지 판별"""
     user_question = user_question.lower()
@@ -170,6 +223,14 @@ class SQLRetriever(BaseRetriever):
         # 2) 수동 SQL 검색
 #         chunks = search_chunks_by_embedding(emb, self.db, top_k=self.top_k)
         chunks = search_chunks_by_embedding_filtered(emb, self.db, top_k=self.top_k, filters=self.filters)
+        logging.info("[FILTER] hits=%d for filters=%s", len(chunks), self.filters)
+
+
+        if self.filters and len(chunks) == 0:
+            logging.warning("[FILTER] mismatch: 0 hits for filters=%s -> retry without filters", self.filters)
+            from rag_utils import search_chunks_by_embedding
+            chunks = search_chunks_by_embedding(emb, self.db, top_k=self.top_k, similarity_threshold=0.0, enable_fallback=False)
+
         # 3) langchain.Document 포맷으로 변환
 
         docs: List[Document] = []
@@ -359,6 +420,11 @@ async def get_model_response(
 
     if is_history_query(user_question) and len(hist.messages) <= 1:
         return "요약할 과거 대화가 없습니다. 먼저 대화를 시작해 주세요.", []
+
+    if not filters:
+        filters = infer_meta_filters(user_question)
+
+    logging.info("[FILTER] using filters=%s", filters)
 
     # ---------------- 질의 생성부 (교체된 부분) ----------------
     all_questions, cache_info = await get_light_queries(user_question, want_para=1)

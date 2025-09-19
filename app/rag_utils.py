@@ -1,10 +1,12 @@
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from sqlalchemy.orm import Session
 from google import genai
 from google.genai.types import EmbedContentConfig
 from sqlalchemy import text
 from langchain_core.messages import BaseMessage
 from langchain_core.messages import get_buffer_string
+import logging
+from sqlalchemy import text
 
 PROJECT_ID = "hyperscale-ai-442809"
 LOCATION = "us-central1"
@@ -24,74 +26,46 @@ def embed_query(text: str) -> List[float]:
     return response.embeddings[0].values
 
 def _build_filter_clause(filters: dict) -> Tuple[str, dict]:
-    """
-    지원 키:
-      - jurisdiction: str
-      - language: str
-      - block_type: str | list[str]
-    """
     clauses, params = [], {}
     if not filters:
         return "", {}
-
     if j := filters.get("jurisdiction"):
         clauses.append("(c.metadata->>'jurisdiction') = :juris")
         params["juris"] = j
-
     if l := filters.get("language"):
         clauses.append("(c.metadata->>'language') = :lang")
         params["lang"] = l
-
     if bt := filters.get("block_type"):
-        # 리스트/단일 모두 지원 (리스트일 때 안전한 OR 묶음으로 변환)
         if isinstance(bt, (list, tuple)):
-            or_terms = []
-            for i, val in enumerate(bt):
-                key = f"btype_{i}"
-                or_terms.append(f"(c.metadata->>'block_type') = :{key}")
-                params[key] = val
-            if or_terms:
-                clauses.append("(" + " OR ".join(or_terms) + ")")
+            clauses.append("(c.metadata->>'block_type') = ANY(:btypes)")
+            params["btypes"] = list(bt)
         else:
             clauses.append("(c.metadata->>'block_type') = :btype")
             params["btype"] = bt
-
     return (" AND " + " AND ".join(clauses)) if clauses else "", params
 
 def search_chunks_by_embedding_filtered(
-    embedding: list[float],
+    embedding: List[float],
     db,
     top_k: int = 10,
-    filters: dict | None = None,
-):
+    filters: Optional[dict] = None,
+) -> List[Dict[str, Any]]:
     where_extra, p = _build_filter_clause(filters or {})
     sql = text(f"""
-        SELECT
-            c.id,
-            c.content,
-            c.metadata,
-            c.page_number,
-            c.block_type,
-            (c.embedding <-> CAST(:emb AS vector)) AS dist
+        SELECT id, content, metadata, page_number,
+               (embedding <-> CAST(:emb AS vector)) AS dist
         FROM chunks c
         WHERE TRUE {where_extra}
-        ORDER BY c.embedding <-> CAST(:emb AS vector)
+        ORDER BY embedding <-> CAST(:emb AS vector)
         LIMIT :k
     """)
-    emb = "[" + ",".join(f"{x:.6f}" for x in embedding) + "]"  # pgvector literal
+    emb = "[" + ",".join(f"{x:.6f}" for x in embedding) + "]"
     rows = db.execute(sql, {"emb": emb, "k": top_k, **p}).fetchall()
     return [
-        {
-            "id": r.id,
-            "content": r.content,
-            "metadata": r.metadata,
-            "page_number": r.page_number,
-            "block_type": r.block_type,
-            "distance": r.dist,
-        }
+        {"id": r.id, "content": r.content, "metadata": r.metadata,
+         "page_number": r.page_number, "distance": r.dist}
         for r in rows
     ]
-
 
 def search_chunks_by_embedding(
     embedding: List[float],
