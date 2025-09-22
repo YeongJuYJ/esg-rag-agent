@@ -25,6 +25,9 @@ def embed_query(text: str) -> List[float]:
     )
     return response.embeddings[0].values
 
+def _vector_literal(vals: List[float]) -> str:
+    return "[" + ",".join(f"{v:.6f}" for v in vals) + "]"
+
 def _build_filter_clause(filters: dict) -> Tuple[str, dict]:
     clauses, params = [], {}
     if not filters:
@@ -43,6 +46,78 @@ def _build_filter_clause(filters: dict) -> Tuple[str, dict]:
             clauses.append("(c.metadata->>'block_type') = :btype")
             params["btype"] = bt
     return (" AND " + " AND ".join(clauses)) if clauses else "", params
+
+def search_chunks_by_embedding_soft(
+    embedding: List[float],
+    db,
+    top_k: int = 10,
+    filters: Optional[Dict[str, Any]] = None,
+    juris_penalty: float = 0.35,
+    lang_penalty: float = 0.15,
+) -> List[Dict[str, Any]]:
+    """
+    WHERE 로 배제하지 않고, 벡터거리 + 메타 불일치 페널티를 더해 정렬.
+    - 필터 신호가 있으면 일치 문서가 상위 노출(정밀도↑)
+    - 신호가 약하거나 문서가 부족해도 미일치 문서가 뒤섞여 리콜 유지(정답률↓ 방지)
+    - 항상 단일 쿼리 1회 호출 → 추가 지연 無
+    """
+    f = filters or {}
+    juris = f.get("jurisdiction")
+    lang  = f.get("language")
+
+    emb_lit = _vector_literal(embedding)
+
+    sql = text("""
+        SELECT
+          c.id,
+          c.content,
+          c.metadata,
+          c.page_number,
+          (c.embedding <-> CAST(:emb AS vector))                         AS dist,
+          CASE WHEN :juris IS NULL OR (c.metadata->>'jurisdiction') = :juris THEN TRUE ELSE FALSE END AS juris_ok,
+          CASE WHEN :lang  IS NULL OR (c.metadata->>'language')    = :lang  THEN TRUE ELSE FALSE END AS lang_ok,
+          (c.embedding <-> CAST(:emb AS vector))
+            + CASE WHEN :juris IS NULL OR (c.metadata->>'jurisdiction') = :juris THEN 0 ELSE :juris_penalty END
+            + CASE WHEN :lang  IS NULL OR (c.metadata->>'language')    = :lang  THEN 0 ELSE :lang_penalty  END AS score
+        FROM chunks c
+        ORDER BY score ASC
+        LIMIT :k
+    """)
+
+    params = {
+        "emb": emb_lit,
+        "k": top_k,
+        "juris": juris,
+        "lang": lang,
+        "juris_penalty": float(juris_penalty),
+        "lang_penalty": float(lang_penalty),
+    }
+
+    rows = db.execute(sql, params).fetchall()
+
+    items: List[Dict[str, Any]] = []
+    hits = 0
+    for r in rows:
+        ok = bool(getattr(r, "juris_ok")) and bool(getattr(r, "lang_ok"))
+        if juris or lang:
+            hits += 1 if ok else 0
+        items.append({
+            "id": r.id,
+            "content": r.content,
+            "metadata": r.metadata,
+            "page_number": r.page_number,
+            "distance": r.dist,
+            "score": r.score,
+            "juris_ok": getattr(r, "juris_ok"),
+            "lang_ok": getattr(r, "lang_ok"),
+        })
+
+    if juris or lang:
+        logging.info("[FILTER] soft hits=%d/%d for filters=%s", hits, len(items), {"jurisdiction": juris, "language": lang})
+    else:
+        logging.info("[FILTER] bypass (no filters)")
+
+    return items
 
 def search_chunks_by_embedding_filtered(
     embedding: List[float],
