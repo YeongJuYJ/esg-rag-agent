@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy import text
 from db import init_db, create_chat_session, log_chat, SessionLocal, User, LoginLog, ChatSession, ChatLog, Note, PromptConfig, get_prompt_config, upsert_prompt_config, delete_prompt_config
 from db_vector import get_alloydb
-from rag_utils import embed_query, build_rag_prompt, search_chunks_by_embedding, search_chunks_by_embedding_filtered
+from rag_utils import embed_query, build_rag_prompt, search_chunks_by_embedding, search_chunks_by_embedding_filtered, search_chunks_by_embedding_soft
 
 from langsmith import traceable
 from langchain_community.chat_message_histories import ChatMessageHistory
@@ -225,14 +225,19 @@ class SQLRetriever(BaseRetriever):
 
         # 2) 수동 SQL 검색
 #         chunks = search_chunks_by_embedding(emb, self.db, top_k=self.top_k)
-        chunks = search_chunks_by_embedding_filtered(emb, self.db, top_k=self.top_k, filters=self.filters)
-        logging.info("[FILTER] hits=%d for filters=%s", len(chunks), self.filters)
+#         chunks = search_chunks_by_embedding_filtered(emb, self.db, top_k=self.top_k, filters=self.filters)
+#         logging.info("[FILTER] hits=%d for filters=%s", len(chunks), self.filters)
+#
+#
+#         if self.filters and len(chunks) == 0:
+#             logging.warning("[FILTER] mismatch: 0 hits for filters=%s -> retry without filters", self.filters)
+#             from rag_utils import search_chunks_by_embedding
+#             chunks = search_chunks_by_embedding(emb, self.db, top_k=self.top_k, similarity_threshold=0.0, enable_fallback=False)
 
-
-        if self.filters and len(chunks) == 0:
-            logging.warning("[FILTER] mismatch: 0 hits for filters=%s -> retry without filters", self.filters)
-            from rag_utils import search_chunks_by_embedding
-            chunks = search_chunks_by_embedding(emb, self.db, top_k=self.top_k, similarity_threshold=0.0, enable_fallback=False)
+        chunks = search_chunks_by_embedding_soft(
+            emb, self.db, top_k=self.top_k, filters=self.filters
+        )
+        logging.info("[FILTER] soft_used filters=%s, returned=%d", self.filters, len(chunks))
 
         # 3) langchain.Document 포맷으로 변환
 
