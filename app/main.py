@@ -46,12 +46,12 @@ logging.basicConfig(level=logging.DEBUG)
 # GCP and model settings
 PROJECT_ID = "hyperscale-ai-442809"
 LOCATION = "us-central1"
-MODEL_NAME = "gemini-1.5-flash-002"
+MODEL_NAME = "gemini-2.5-flash"
 
 # Initialize Vertex AI and load model
 vertexai.init(project=PROJECT_ID, location=LOCATION)
 text_model = GenerativeModel(model_name=MODEL_NAME)
-paraphrase_model = GenerativeModel("gemini-1.5-flash-002")
+paraphrase_model = GenerativeModel("gemini-2.5-flash")
 
 # Custom Embeddings class wrapping existing embed_query
 class GenAIEmbeddings(Embeddings):
