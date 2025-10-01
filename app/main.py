@@ -557,7 +557,7 @@ async def get_model_response(
         None,
         lambda: text_model.generate_content(
             final_prompt,
-            generation_config={"candidate_count": 1, "max_output_tokens": 2048, "temperature": 0.35}
+            generation_config={"candidate_count": 1, "max_output_tokens": 8192, "temperature": 0.35}
         )
     )
     answer = resp.text
