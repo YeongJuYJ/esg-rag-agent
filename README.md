@@ -325,6 +325,115 @@ Cross-encoder reranking evaluates the full **query-context pair**, which leads t
 
 ---
 
+# Getting Started
+
+## Prerequisites
+
+- Python 3.10+
+- Docker
+- Google Cloud SDK
+- Google Cloud project with access to:
+  - Vertex AI
+  - AlloyDB
+  - Cloud SQL
+  - Document AI
+
+Set environment variables.
+
+```
+PROJECT_ID=
+VERTEX_AI_LOCATION=
+ALLOYDB_HOST=
+ALLOYDB_USER=
+ALLOYDB_PASSWORD=
+CLOUDSQL_HOST=
+CLOUDSQL_USER=
+CLOUDSQL_PASSWORD=
+```
+
+---
+
+## Installation
+
+Clone the repository.
+
+```bash
+git clone https://github.com/YeongJuYJ/esg-rag-agent.git
+cd esg-rag-agent
+```
+
+Install dependencies.
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## Run the Application
+
+Start the FastAPI server.
+
+```bash
+uvicorn main:app --reload
+```
+
+Server runs at:
+
+```
+http://localhost:8000
+```
+
+---
+
+## Docker
+
+Build the container.
+
+```bash
+docker build -t esg-rag-agent .
+```
+
+Run the container.
+
+```bash
+docker run -p 8000:8000 esg-rag-agent
+```
+
+---
+
+# Example Query
+
+Below is an example interaction with the ESG RAG system.
+
+**User Query**
+
+```
+What are the key ESG initiatives mentioned in the sustainability report?
+```
+
+**Retrieval Process**
+
+1. Query is embedded using **Vertex AI Embeddings**
+2. Semantic search retrieves relevant chunks from **AlloyDB (pgvector)**
+3. Chunks are reranked by the cross-encoder model
+4. Context is provided to **Gemini LLM**
+
+**Response Example**
+
+```
+The sustainability report highlights three major ESG initiatives:
+
+1. Carbon neutrality roadmap targeting 2040
+2. Expansion of renewable energy sourcing
+3. Supply chain transparency through ESG reporting
+
+These initiatives focus on environmental sustainability,
+corporate governance transparency, and responsible sourcing.
+```
+
+The response is generated **strictly based on retrieved document context**, ensuring grounded answers.
+
 # Tech Stack
 
 | Layer | Technology |
