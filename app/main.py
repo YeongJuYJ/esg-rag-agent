@@ -63,7 +63,7 @@ class GenAIEmbeddings(Embeddings):
 
 # Configure embedding model and vector store
 embedding_model = GenAIEmbeddings()
-CONNECTION_STRING = "postgresql+psycopg2://postgres:***REMOVED***@10.20.0.2:5432/postgres"
+CONNECTION_STRING = os.getenv("ALLOYDB_URL")
 
 vector_store = PGVector.from_existing_index(
     embedding=embedding_model,

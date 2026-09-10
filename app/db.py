@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, F
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:***REMOVED***@10.30.0.3:5432/chatdb")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 engine = create_engine(DATABASE_URL, connect_args={"options": "-c search_path=public"})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

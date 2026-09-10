@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 # AlloyDB 연결 정보 (하드코딩 또는 .env 사용)
-ALLOYDB_URL = os.getenv("ALLOYDB_URL", "postgresql://postgres:***REMOVED***@10.20.0.2:5432/postgres")
+ALLOYDB_URL = os.getenv("ALLOYDB_URL")
 
 # SQLAlchemy 엔진 생성
 alloydb_engine = create_engine(
